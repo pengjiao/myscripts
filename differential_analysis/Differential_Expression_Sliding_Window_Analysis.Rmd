@@ -1,0 +1,711 @@
+---
+title: "Differential_Expression_Sliding_Window_Analysis"
+author: ""
+date: "2021/5/7"
+output: 
+  html_document: 
+    toc: yes
+    toc_depth: 5
+    toc_float: yes
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = F, message = F)
+```
+
+Differential Expression - Sliding Window ANalysis (DE-SWAN) 
+
+## Load library
+```{r}
+library(DEswan)
+library(ggplot2)
+library(ComplexHeatmap)
+library(tibble)
+library(dplyr)
+library(pracma)
+```
+
+## Data
+
+Age is the quantitative trait of interest and Sex is the covariate we want to include in the analysis
+
+```{r}
+load("../../input/omics3_combined/SixHosp_aging_174subjects_omics3_meta_data.RData")
+meta <- meta_dat
+meta$Gender <- meta$sex
+meta$Gender[meta$Gender == "1"] <- "male"
+meta$Gender[meta$Gender == "2"] <- "female"
+df <- ck_dat
+colnames(df) <- make.names(colnames(df), unique = T)
+dfs <- log10(df + 0.00001)
+# dfs <- df
+data <- cbind(meta[,c("age", "Gender")], dfs)
+colnames(data)[1:2] <- c("Age", "Sex")
+
+# distribution of qt
+hist(data[,1],main="qt distribution",xlab="Age (years)")
+
+# covariates
+table(data[,2])
+mycols <- as.character(see::metro_colors())
+```
+
+## DEswan windown 5
+```{r}
+x <- cor(data[,1],data[,-c(1:2)])
+
+res.DEswan <- DEswan(data.df = data[,2+c(which(colnames(x) %in% colnames(x)[abs(x)>0]))],
+                  qt = data[,1],
+                  window.center = seq(20,90,1),
+                  buckets.size = 5,
+                  covariates = data.frame(data["Sex"]))
+
+# pvalues of qT and covariates for each variable and each window.center
+DT::datatable(res.DEswan$p)
+
+# coefficients of qT and covariates for each variable and each window.center
+DT::datatable(res.DEswan$coeff)
+
+# reshape
+res.DEswan.wide.p=reshape.DEswan(res.DEswan,parameter = 1,factor = "qt")
+DT::datatable(res.DEswan.wide.p)
+```
+
+### Pvalues adjustment
+
+The Bonferroni correction is one simple way to take this into account; adjusting the false discovery rate using the Benjamini-Hochberg procedure is a more powerful method.
+
+```{r}
+res.DEswan.wide.q <- q.DEswan(res.DEswan.wide.p,method="BH")
+DT::datatable(res.DEswan.wide.q)
+```
+
+### Calculate and plot the number of significant variables
+
+One simple way to visualize DEswan results is to count the number of significant variables for each window.center tested.
+
+```{r}
+res.DEswan.wide.p.signif <- nsignif.DEswan(res.DEswan.wide.p)
+toPlot <- res.DEswan.wide.p.signif
+x <- as.numeric(gsub("X","",colnames(toPlot)))
+plot(1, type = "n", xlim=c(min(x,na.rm=T),max(x,na.rm=T)),ylim=c(0,max(toPlot,na.rm=T)),ylab="# significant",xlab="qt")
+for(i in 1:nrow(toPlot)){
+  lines(x,
+        toPlot[i,],type='l',lwd=i)
+}
+legend("topleft",legend = paste("p<",rownames(toPlot),sep=""),lwd=c(1,2,3))
+
+tmp <- data.frame(toPlot[1,])
+tmp <- rownames_to_column(tmp, var = "x")
+tmp$x <- gsub("X", "", tmp$x)
+colnames(tmp) <- c("x", "y")
+tmp$x <- as.numeric(tmp$x)
+x_peak <- findpeaks(tmp$y, nups = 1, threshold = 1, sortstr = T)
+x_num <- ifelse(nrow(x_peak) < 3, nrow(x_peak), 3)
+x_ord <- x_peak[,2][1:x_num]
+x_lab <- tmp$x[x_ord]
+x_txt <- rep("", nrow(tmp))
+x_txt[x_ord] <- x_lab
+ggplot(tmp, aes(x, y)) +
+  geom_line(size=1) +
+  geom_vline(xintercept=x_lab,
+                size=1, colour=see::metro_colors(c("blue", "red", "green"))[1:x_num]) +
+  geom_text(mapping = aes(x = tmp$x, y = 2, label = x_txt),
+                          size=4, angle=90, vjust=-0.4, hjust=0) +
+  theme(panel.background = element_rect(fill = "white", colour = "grey50")) +
+  ggtitle("Peaks of aging cytokines") +
+  ylab("# of significant cytokines (p < 0.05)") + 
+  xlab("Age (years)")
+
+
+
+res.DEswan.wide.q.signif <- nsignif.DEswan(res.DEswan.wide.q)
+toPlot <- res.DEswan.wide.q.signif
+x <- as.numeric(gsub("X","",colnames(toPlot)))
+plot(1, type = "n", xlim=c(min(x,na.rm=T),max(x,na.rm=T)),ylim=c(0,max(toPlot,na.rm=T)),ylab="# significant",xlab="qt")
+for(i in 1:nrow(toPlot)){
+  lines(x,
+        toPlot[i,],type='l',lwd=i)
+}
+legend("topleft",legend = paste("q<",rownames(toPlot),sep=""),lwd=c(1,2,3))
+
+
+tmp <- data.frame(toPlot[1,])
+tmp <- rownames_to_column(tmp, var = "x")
+tmp$x <- gsub("X", "", tmp$x)
+colnames(tmp) <- c("x", "y")
+tmp$x <- as.numeric(tmp$x)
+x_peak <- findpeaks(tmp$y, nups = 1, threshold = 1, sortstr = T)
+x_num <- ifelse(nrow(x_peak) < 3, nrow(x_peak), 3)
+x_ord <- x_peak[,2][1:x_num]
+x_lab <- tmp$x[x_ord]
+x_txt <- rep("", nrow(tmp))
+x_txt[x_ord] <- x_lab
+ggplot(tmp, aes(x, y)) +
+  geom_line(size=1) +
+  geom_vline(xintercept=x_lab,
+                size=1, colour=see::metro_colors(c("blue", "red", "green"))[1:x_num]) +
+  geom_text(mapping = aes(x = tmp$x, y = 2, label = x_txt),
+                          size=4, angle=90, vjust=-0.4, hjust=0) +
+  theme(panel.background = element_rect(fill = "white", colour = "grey50")) +
+  ggtitle("Peaks of aging cytokines") +
+  ylab("# of significant cytokines (q < 0.05)") + 
+  xlab("Age (years)")
+```
+
+
+
+### Heatmap of changes during aging
+
+The best way to identify when and how the features are changing in the qt space is to generate a heatmap of the signed effects.
+
+```{r, fig.height=9, fig.width=5}
+res.DEswan.wide.coeff <- reshape.DEswan(res.DEswan,parameter = 2,factor = "qt")
+toHeatmap <- sign(res.DEswan.wide.coeff[,-1])*-log10(res.DEswan.wide.p[,-1])
+rownames(toHeatmap) <- res.DEswan.wide.coeff$variable
+
+pairs.breaks <- seq(-3, 3, by=0.01)
+mycol <- gplots::colorpanel(n=length(pairs.breaks)-1,low="cyan",mid="black",high="yellow")
+gplots::heatmap.2(as.matrix(toHeatmap),
+                       cexRow=.5,cexCol=.7,
+                       trace="none",
+                       dendrogram="row",
+                       breaks=pairs.breaks, 
+                       col=mycol, 
+                       Rowv=T,key=F,
+                       Colv=F,
+                       lhei=c(0.2,10),
+                       lwid=c(.2,3)
+)
+```
+
+### Covariates analysis
+
+Similar analysis can be generated for each covariates. Here we show how sex affect the plasma proteome during aging.
+
+```{r, fig.height=9, fig.width=5}
+res.DEswan.wide.p.covar1 <- reshape.DEswan(res.DEswan,parameter = 1,factor = "Sex")
+res.DEswan.wide.coeff.covar1 <- reshape.DEswan(res.DEswan,parameter = 2,factor = "Sexmale")
+
+toHeatmap <- sign(res.DEswan.wide.coeff.covar1[,-1])*-log10(res.DEswan.wide.p.covar1[,-1])
+rownames(toHeatmap) <- res.DEswan.wide.coeff.covar1$variable
+
+pairs.breaks <- seq(-3, 3, by=0.01)
+mycol <- gplots::colorpanel(n=length(pairs.breaks)-1,low="cyan",mid="black",high="yellow")
+
+
+gplots::heatmap.2(as.matrix(toHeatmap),
+                       cexRow=.5,cexCol=.7,
+                       trace="none",
+                       dendrogram="both",
+                       breaks=pairs.breaks, 
+                       col=mycol, 
+                       Rowv=T,key=F,
+                       Colv=F,
+                       lhei=c(0.2,10),
+                       lwid=c(.2,3)
+)
+```
+
+
+## DEswan windown 10
+```{r}
+x <- cor(data[,1],data[,-c(1:2)])
+
+res.DEswan <- DEswan(data.df = data[,2+c(which(colnames(x) %in% colnames(x)[abs(x)>0]))],
+                  qt = data[,1],
+                  window.center = seq(20,90,1),
+                  buckets.size = 10,
+                  covariates = data.frame(data["Sex"]))
+
+# pvalues of qT and covariates for each variable and each window.center
+DT::datatable(res.DEswan$p)
+
+# coefficients of qT and covariates for each variable and each window.center
+DT::datatable(res.DEswan$coeff)
+
+# reshape
+res.DEswan.wide.p=reshape.DEswan(res.DEswan,parameter = 1,factor = "qt")
+DT::datatable(res.DEswan.wide.p)
+```
+
+### Pvalues adjustment
+
+The Bonferroni correction is one simple way to take this into account; adjusting the false discovery rate using the Benjamini-Hochberg procedure is a more powerful method.
+
+```{r}
+res.DEswan.wide.q <- q.DEswan(res.DEswan.wide.p,method="BH")
+DT::datatable(res.DEswan.wide.q)
+```
+
+### Calculate and plot the number of significant variables
+
+One simple way to visualize DEswan results is to count the number of significant variables for each window.center tested.
+
+```{r}
+res.DEswan.wide.p.signif <- nsignif.DEswan(res.DEswan.wide.p)
+toPlot <- res.DEswan.wide.p.signif
+x <- as.numeric(gsub("X","",colnames(toPlot)))
+plot(1, type = "n", xlim=c(min(x,na.rm=T),max(x,na.rm=T)),ylim=c(0,max(toPlot,na.rm=T)),ylab="# significant",xlab="qt")
+for(i in 1:nrow(toPlot)){
+  lines(x,
+        toPlot[i,],type='l',lwd=i)
+}
+legend("topleft",legend = paste("p<",rownames(toPlot),sep=""),lwd=c(1,2,3))
+
+tmp <- data.frame(toPlot[1,])
+tmp <- rownames_to_column(tmp, var = "x")
+tmp$x <- gsub("X", "", tmp$x)
+colnames(tmp) <- c("x", "y")
+tmp$x <- as.numeric(tmp$x)
+x_peak <- findpeaks(tmp$y, nups = 1, threshold = 1, sortstr = T)
+x_num <- ifelse(nrow(x_peak) < 3, nrow(x_peak), 3)
+x_ord <- x_peak[,2][1:x_num]
+x_lab <- tmp$x[x_ord]
+x_txt <- rep("", nrow(tmp))
+x_txt[x_ord] <- x_lab
+ggplot(tmp, aes(x, y)) +
+  geom_line(size=1) +
+  geom_vline(xintercept=x_lab,
+                size=1, colour=see::metro_colors(c("blue", "red", "green"))[1:x_num]) +
+  geom_text(mapping = aes(x = tmp$x, y = 2, label = x_txt),
+                          size=4, angle=90, vjust=-0.4, hjust=0) +
+  theme(panel.background = element_rect(fill = "white", colour = "grey50")) +
+  ggtitle("Peaks of aging cytokines") +
+  ylab("# of significant cytokines (p < 0.05)") + 
+  xlab("Age (years)")
+
+
+
+res.DEswan.wide.q.signif <- nsignif.DEswan(res.DEswan.wide.q)
+toPlot <- res.DEswan.wide.q.signif
+x <- as.numeric(gsub("X","",colnames(toPlot)))
+plot(1, type = "n", xlim=c(min(x,na.rm=T),max(x,na.rm=T)),ylim=c(0,max(toPlot,na.rm=T)),ylab="# significant",xlab="qt")
+for(i in 1:nrow(toPlot)){
+  lines(x,
+        toPlot[i,],type='l',lwd=i)
+}
+legend("topleft",legend = paste("q<",rownames(toPlot),sep=""),lwd=c(1,2,3))
+
+
+tmp <- data.frame(toPlot[1,])
+tmp <- rownames_to_column(tmp, var = "x")
+tmp$x <- gsub("X", "", tmp$x)
+colnames(tmp) <- c("x", "y")
+tmp$x <- as.numeric(tmp$x)
+x_peak <- findpeaks(tmp$y, nups = 1, threshold = 1, sortstr = T)
+x_num <- ifelse(nrow(x_peak) < 3, nrow(x_peak), 3)
+x_ord <- x_peak[,2][1:x_num]
+x_lab <- tmp$x[x_ord]
+x_txt <- rep("", nrow(tmp))
+x_txt[x_ord] <- x_lab
+ggplot(tmp, aes(x, y)) +
+  geom_line(size=1) +
+  geom_vline(xintercept=x_lab,
+                size=1, colour=see::metro_colors(c("blue", "red", "green"))[1:x_num]) +
+  geom_text(mapping = aes(x = tmp$x, y = 2, label = x_txt),
+                          size=4, angle=90, vjust=-0.4, hjust=0) +
+  theme(panel.background = element_rect(fill = "white", colour = "grey50")) +
+  ggtitle("Peaks of aging cytokines") +
+  ylab("# of significant cytokines (q < 0.05)") + 
+  xlab("Age (years)")
+```
+
+
+
+### Heatmap of changes during aging
+
+The best way to identify when and how the features are changing in the qt space is to generate a heatmap of the signed effects.
+
+```{r, fig.height=9, fig.width=5}
+res.DEswan.wide.coeff <- reshape.DEswan(res.DEswan,parameter = 2,factor = "qt")
+toHeatmap <- sign(res.DEswan.wide.coeff[,-1])*-log10(res.DEswan.wide.p[,-1])
+rownames(toHeatmap) <- res.DEswan.wide.coeff$variable
+
+pairs.breaks <- seq(-3, 3, by=0.01)
+mycol <- gplots::colorpanel(n=length(pairs.breaks)-1,low="cyan",mid="black",high="yellow")
+gplots::heatmap.2(as.matrix(toHeatmap),
+                       cexRow=.5,cexCol=.7,
+                       trace="none",
+                       dendrogram="row",
+                       breaks=pairs.breaks, 
+                       col=mycol, 
+                       Rowv=T,key=F,
+                       Colv=F,
+                       lhei=c(0.2,10),
+                       lwid=c(.2,3)
+)
+pdf("window_10_age_heatmap.pdf", width = 8, height = 14)
+gplots::heatmap.2(as.matrix(toHeatmap),
+                       cexRow=.5,cexCol=.7,
+                       trace="none",
+                       dendrogram="row",
+                       breaks=pairs.breaks, 
+                       col=mycol, 
+                       Rowv=T,key=F,
+                       Colv=F,
+                       lhei=c(0.2,10),
+                       lwid=c(.2,3)
+)
+dev.off()
+```
+
+### Covariates analysis
+
+Similar analysis can be generated for each covariates. Here we show how sex affect the plasma proteome during aging.
+
+```{r, fig.height=9, fig.width=5}
+res.DEswan.wide.p.covar1 <- reshape.DEswan(res.DEswan,parameter = 1,factor = "Sex")
+res.DEswan.wide.coeff.covar1 <- reshape.DEswan(res.DEswan,parameter = 2,factor = "Sexmale")
+
+toHeatmap <- sign(res.DEswan.wide.coeff.covar1[,-1])*-log10(res.DEswan.wide.p.covar1[,-1])
+rownames(toHeatmap) <- res.DEswan.wide.coeff.covar1$variable
+
+pairs.breaks <- seq(-3, 3, by=0.01)
+mycol <- gplots::colorpanel(n=length(pairs.breaks)-1,low="cyan",mid="black",high="yellow")
+
+
+gplots::heatmap.2(as.matrix(toHeatmap),
+                       cexRow=.5,cexCol=.7,
+                       trace="none",
+                       dendrogram="both",
+                       breaks=pairs.breaks, 
+                       col=mycol, 
+                       Rowv=T,key=F,
+                       Colv=F,
+                       lhei=c(0.2,10),
+                       lwid=c(.2,3)
+)
+pdf("window_10_sex_heatmap.pdf", width = 8, height = 14)
+gplots::heatmap.2(as.matrix(toHeatmap),
+                       cexRow=.5,cexCol=.7,
+                       trace="none",
+                       dendrogram="both",
+                       breaks=pairs.breaks, 
+                       col=mycol, 
+                       Rowv=T,key=F,
+                       Colv=F,
+                       lhei=c(0.2,10),
+                       lwid=c(.2,3)
+)
+dev.off()
+```
+
+
+
+## DEswan windown 15
+```{r}
+x <- cor(data[,1],data[,-c(1:2)])
+
+res.DEswan <- DEswan(data.df = data[,2+c(which(colnames(x) %in% colnames(x)[abs(x)>0]))],
+                  qt = data[,1],
+                  window.center = seq(20,90,1),
+                  buckets.size = 15,
+                  covariates = data.frame(data["Sex"]))
+
+# pvalues of qT and covariates for each variable and each window.center
+DT::datatable(res.DEswan$p)
+
+# coefficients of qT and covariates for each variable and each window.center
+DT::datatable(res.DEswan$coeff)
+
+# reshape
+res.DEswan.wide.p=reshape.DEswan(res.DEswan,parameter = 1,factor = "qt")
+DT::datatable(res.DEswan.wide.p)
+```
+
+### Pvalues adjustment
+
+The Bonferroni correction is one simple way to take this into account; adjusting the false discovery rate using the Benjamini-Hochberg procedure is a more powerful method.
+
+```{r}
+res.DEswan.wide.q <- q.DEswan(res.DEswan.wide.p,method="BH")
+DT::datatable(res.DEswan.wide.q)
+```
+
+### Calculate and plot the number of significant variables
+
+One simple way to visualize DEswan results is to count the number of significant variables for each window.center tested.
+
+```{r}
+res.DEswan.wide.p.signif <- nsignif.DEswan(res.DEswan.wide.p)
+toPlot <- res.DEswan.wide.p.signif
+x <- as.numeric(gsub("X","",colnames(toPlot)))
+plot(1, type = "n", xlim=c(min(x,na.rm=T),max(x,na.rm=T)),ylim=c(0,max(toPlot,na.rm=T)),ylab="# significant",xlab="qt")
+for(i in 1:nrow(toPlot)){
+  lines(x,
+        toPlot[i,],type='l',lwd=i)
+}
+legend("topleft",legend = paste("p<",rownames(toPlot),sep=""),lwd=c(1,2,3))
+
+tmp <- data.frame(toPlot[1,])
+tmp <- rownames_to_column(tmp, var = "x")
+tmp$x <- gsub("X", "", tmp$x)
+colnames(tmp) <- c("x", "y")
+tmp$x <- as.numeric(tmp$x)
+x_peak <- findpeaks(tmp$y, nups = 1, threshold = 1, sortstr = T)
+x_num <- ifelse(nrow(x_peak) < 3, nrow(x_peak), 3)
+x_ord <- x_peak[,2][1:x_num]
+x_lab <- tmp$x[x_ord]
+x_txt <- rep("", nrow(tmp))
+x_txt[x_ord] <- x_lab
+ggplot(tmp, aes(x, y)) +
+  geom_line(size=1) +
+  geom_vline(xintercept=x_lab,
+                size=1, colour=see::metro_colors(c("blue", "red", "green"))[1:x_num]) +
+  geom_text(mapping = aes(x = tmp$x, y = 2, label = x_txt),
+                          size=4, angle=90, vjust=-0.4, hjust=0) +
+  theme(panel.background = element_rect(fill = "white", colour = "grey50")) +
+  ggtitle("Peaks of aging cytokines") +
+  ylab("# of significant cytokines (p < 0.05)") + 
+  xlab("Age (years)")
+
+
+
+res.DEswan.wide.q.signif <- nsignif.DEswan(res.DEswan.wide.q)
+toPlot <- res.DEswan.wide.q.signif
+x <- as.numeric(gsub("X","",colnames(toPlot)))
+plot(1, type = "n", xlim=c(min(x,na.rm=T),max(x,na.rm=T)),ylim=c(0,max(toPlot,na.rm=T)),ylab="# significant",xlab="qt")
+for(i in 1:nrow(toPlot)){
+  lines(x,
+        toPlot[i,],type='l',lwd=i)
+}
+legend("topleft",legend = paste("q<",rownames(toPlot),sep=""),lwd=c(1,2,3))
+
+
+tmp <- data.frame(toPlot[1,])
+tmp <- rownames_to_column(tmp, var = "x")
+tmp$x <- gsub("X", "", tmp$x)
+colnames(tmp) <- c("x", "y")
+tmp$x <- as.numeric(tmp$x)
+x_peak <- findpeaks(tmp$y, nups = 1, threshold = 1, sortstr = T)
+x_num <- ifelse(nrow(x_peak) < 3, nrow(x_peak), 3)
+x_ord <- x_peak[,2][1:x_num]
+x_lab <- tmp$x[x_ord]
+x_txt <- rep("", nrow(tmp))
+x_txt[x_ord] <- x_lab
+ggplot(tmp, aes(x, y)) +
+  geom_line(size=1) +
+  geom_vline(xintercept=x_lab,
+                size=1, colour=see::metro_colors(c("blue", "red", "green"))[1:x_num]) +
+  geom_text(mapping = aes(x = tmp$x, y = 2, label = x_txt),
+                          size=4, angle=90, vjust=-0.4, hjust=0) +
+  theme(panel.background = element_rect(fill = "white", colour = "grey50")) +
+  ggtitle("Peaks of aging cytokines") +
+  ylab("# of significant cytokines (q < 0.05)") + 
+  xlab("Age (years)")
+```
+
+
+
+### Heatmap of changes during aging
+
+The best way to identify when and how the features are changing in the qt space is to generate a heatmap of the signed effects.
+
+```{r, fig.height=9, fig.width=5}
+res.DEswan.wide.coeff <- reshape.DEswan(res.DEswan,parameter = 2,factor = "qt")
+toHeatmap <- sign(res.DEswan.wide.coeff[,-1])*-log10(res.DEswan.wide.p[,-1])
+rownames(toHeatmap) <- res.DEswan.wide.coeff$variable
+
+pairs.breaks <- seq(-3, 3, by=0.01)
+mycol <- gplots::colorpanel(n=length(pairs.breaks)-1,low="cyan",mid="black",high="yellow")
+gplots::heatmap.2(as.matrix(toHeatmap),
+                       cexRow=.5,cexCol=.7,
+                       trace="none",
+                       dendrogram="row",
+                       breaks=pairs.breaks, 
+                       col=mycol, 
+                       Rowv=T,key=F,
+                       Colv=F,
+                       lhei=c(0.2,10),
+                       lwid=c(.2,3)
+)
+```
+
+### Covariates analysis
+
+Similar analysis can be generated for each covariates. Here we show how sex affect the plasma proteome during aging.
+
+```{r, fig.height=9, fig.width=5}
+res.DEswan.wide.p.covar1 <- reshape.DEswan(res.DEswan,parameter = 1,factor = "Sex")
+res.DEswan.wide.coeff.covar1 <- reshape.DEswan(res.DEswan,parameter = 2,factor = "Sexmale")
+
+toHeatmap <- sign(res.DEswan.wide.coeff.covar1[,-1])*-log10(res.DEswan.wide.p.covar1[,-1])
+rownames(toHeatmap) <- res.DEswan.wide.coeff.covar1$variable
+
+pairs.breaks <- seq(-3, 3, by=0.01)
+mycol <- gplots::colorpanel(n=length(pairs.breaks)-1,low="cyan",mid="black",high="yellow")
+
+
+gplots::heatmap.2(as.matrix(toHeatmap),
+                       cexRow=.5,cexCol=.7,
+                       trace="none",
+                       dendrogram="both",
+                       breaks=pairs.breaks, 
+                       col=mycol, 
+                       Rowv=T,key=F,
+                       Colv=F,
+                       lhei=c(0.2,10),
+                       lwid=c(.2,3)
+)
+```
+
+
+
+## DEswan windown 20
+```{r}
+x <- cor(data[,1],data[,-c(1:2)])
+
+res.DEswan <- DEswan(data.df = data[,2+c(which(colnames(x) %in% colnames(x)[abs(x)>0]))],
+                  qt = data[,1],
+                  window.center = seq(20,90,1),
+                  buckets.size = 20,
+                  covariates = data.frame(data["Sex"]))
+
+# pvalues of qT and covariates for each variable and each window.center
+DT::datatable(res.DEswan$p)
+
+# coefficients of qT and covariates for each variable and each window.center
+DT::datatable(res.DEswan$coeff)
+
+# reshape
+res.DEswan.wide.p=reshape.DEswan(res.DEswan,parameter = 1,factor = "qt")
+DT::datatable(res.DEswan.wide.p)
+```
+
+### Pvalues adjustment
+
+The Bonferroni correction is one simple way to take this into account; adjusting the false discovery rate using the Benjamini-Hochberg procedure is a more powerful method.
+
+```{r}
+res.DEswan.wide.q <- q.DEswan(res.DEswan.wide.p,method="BH")
+DT::datatable(res.DEswan.wide.q)
+```
+
+### Calculate and plot the number of significant variables
+
+One simple way to visualize DEswan results is to count the number of significant variables for each window.center tested.
+
+```{r}
+res.DEswan.wide.p.signif <- nsignif.DEswan(res.DEswan.wide.p)
+toPlot <- res.DEswan.wide.p.signif
+x <- as.numeric(gsub("X","",colnames(toPlot)))
+plot(1, type = "n", xlim=c(min(x,na.rm=T),max(x,na.rm=T)),ylim=c(0,max(toPlot,na.rm=T)),ylab="# significant",xlab="qt")
+for(i in 1:nrow(toPlot)){
+  lines(x,
+        toPlot[i,],type='l',lwd=i)
+}
+legend("topleft",legend = paste("p<",rownames(toPlot),sep=""),lwd=c(1,2,3))
+
+tmp <- data.frame(toPlot[1,])
+tmp <- rownames_to_column(tmp, var = "x")
+tmp$x <- gsub("X", "", tmp$x)
+colnames(tmp) <- c("x", "y")
+tmp$x <- as.numeric(tmp$x)
+x_peak <- findpeaks(tmp$y, nups = 1, threshold = 1, sortstr = T)
+x_num <- ifelse(nrow(x_peak) < 3, nrow(x_peak), 3)
+x_ord <- x_peak[,2][1:x_num]
+x_lab <- tmp$x[x_ord]
+x_txt <- rep("", nrow(tmp))
+x_txt[x_ord] <- x_lab
+ggplot(tmp, aes(x, y)) +
+  geom_line(size=1) +
+  geom_vline(xintercept=x_lab,
+                size=1, colour=see::metro_colors(c("blue", "red", "green"))[1:x_num]) +
+  geom_text(mapping = aes(x = tmp$x, y = 2, label = x_txt),
+                          size=4, angle=90, vjust=-0.4, hjust=0) +
+  theme(panel.background = element_rect(fill = "white", colour = "grey50")) +
+  ggtitle("Peaks of aging cytokines") +
+  ylab("# of significant cytokines (p < 0.05)") + 
+  xlab("Age (years)")
+
+
+
+res.DEswan.wide.q.signif <- nsignif.DEswan(res.DEswan.wide.q)
+toPlot <- res.DEswan.wide.q.signif
+x <- as.numeric(gsub("X","",colnames(toPlot)))
+plot(1, type = "n", xlim=c(min(x,na.rm=T),max(x,na.rm=T)),ylim=c(0,max(toPlot,na.rm=T)),ylab="# significant",xlab="qt")
+for(i in 1:nrow(toPlot)){
+  lines(x,
+        toPlot[i,],type='l',lwd=i)
+}
+legend("topleft",legend = paste("q<",rownames(toPlot),sep=""),lwd=c(1,2,3))
+
+
+tmp <- data.frame(toPlot[1,])
+tmp <- rownames_to_column(tmp, var = "x")
+tmp$x <- gsub("X", "", tmp$x)
+colnames(tmp) <- c("x", "y")
+tmp$x <- as.numeric(tmp$x)
+x_peak <- findpeaks(tmp$y, nups = 1, threshold = 1, sortstr = T)
+x_num <- ifelse(nrow(x_peak) < 3, nrow(x_peak), 3)
+x_ord <- x_peak[,2][1:x_num]
+x_lab <- tmp$x[x_ord]
+x_txt <- rep("", nrow(tmp))
+x_txt[x_ord] <- x_lab
+ggplot(tmp, aes(x, y)) +
+  geom_line(size=1) +
+  geom_vline(xintercept=x_lab,
+                size=1, colour=see::metro_colors(c("blue", "red", "green"))[1:x_num]) +
+  geom_text(mapping = aes(x = tmp$x, y = 2, label = x_txt),
+                          size=4, angle=90, vjust=-0.4, hjust=0) +
+  theme(panel.background = element_rect(fill = "white", colour = "grey50")) +
+  ggtitle("Peaks of aging cytokines") +
+  ylab("# of significant cytokines (q < 0.05)") + 
+  xlab("Age (years)")
+```
+
+
+
+### Heatmap of changes during aging
+
+The best way to identify when and how the features are changing in the qt space is to generate a heatmap of the signed effects.
+
+```{r, fig.height=9, fig.width=5}
+res.DEswan.wide.coeff <- reshape.DEswan(res.DEswan,parameter = 2,factor = "qt")
+toHeatmap <- sign(res.DEswan.wide.coeff[,-1])*-log10(res.DEswan.wide.p[,-1])
+rownames(toHeatmap) <- res.DEswan.wide.coeff$variable
+
+pairs.breaks <- seq(-3, 3, by=0.01)
+mycol <- gplots::colorpanel(n=length(pairs.breaks)-1,low="cyan",mid="black",high="yellow")
+gplots::heatmap.2(as.matrix(toHeatmap),
+                       cexRow=.5,cexCol=.7,
+                       trace="none",
+                       dendrogram="row",
+                       breaks=pairs.breaks, 
+                       col=mycol, 
+                       Rowv=T,key=F,
+                       Colv=F,
+                       lhei=c(0.2,10),
+                       lwid=c(.2,3)
+)
+```
+
+### Covariates analysis
+
+Similar analysis can be generated for each covariates. Here we show how sex affect the plasma proteome during aging.
+
+```{r, fig.height=9, fig.width=5}
+res.DEswan.wide.p.covar1 <- reshape.DEswan(res.DEswan,parameter = 1,factor = "Sex")
+res.DEswan.wide.coeff.covar1 <- reshape.DEswan(res.DEswan,parameter = 2,factor = "Sexmale")
+
+toHeatmap <- sign(res.DEswan.wide.coeff.covar1[,-1])*-log10(res.DEswan.wide.p.covar1[,-1])
+rownames(toHeatmap) <- res.DEswan.wide.coeff.covar1$variable
+
+pairs.breaks <- seq(-3, 3, by=0.01)
+mycol <- gplots::colorpanel(n=length(pairs.breaks)-1,low="cyan",mid="black",high="yellow")
+
+
+gplots::heatmap.2(as.matrix(toHeatmap),
+                       cexRow=.5,cexCol=.7,
+                       trace="none",
+                       dendrogram="both",
+                       breaks=pairs.breaks, 
+                       col=mycol, 
+                       Rowv=T,key=F,
+                       Colv=F,
+                       lhei=c(0.2,10),
+                       lwid=c(.2,3)
+)
+```
+

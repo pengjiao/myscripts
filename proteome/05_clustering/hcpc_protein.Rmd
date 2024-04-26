@@ -1,0 +1,121 @@
+---
+title: "hcpc"
+author: ""
+date: "1/24/2022"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+load packages
+```{r}
+library(factoextra)
+library(FactoMineR)
+library(tidyverse)
+library(ComplexHeatmap)
+```
+
+load data
+```{r}
+dat <- read.csv("../../input/ZS_100_sample_proteomics_QC_delete_50_percent_missing_knn_impute_log.csv")
+df <- dat %>% remove_rownames %>% column_to_rownames(var = "sample")
+df1 <- data.frame(t(df))
+
+```
+
+```{r}
+library(FactoMineR)
+# Compute PCA with ncp = 3
+res.pca <- PCA(df1, ncp = 2, graph = F)
+# Compute hierarchical clustering on principal components
+res.hcpc <- HCPC(res.pca, graph = F,nb.clust = 2)
+pdf("hcpc_cluster_dendrogram.pdf",height = 8,width = 25)
+fviz_dend(res.hcpc, 
+          cex = 0.3,                     # Label size
+          palette = "jco",               # Color palette see ?ggpubr::ggpar
+          rect = TRUE, rect_fill = TRUE, # Add rectangle around groups
+          rect_border = "jco",           # Rectangle color
+          labels_track_height = 0.8      # Augment the room for labels
+          )
+dev.off()
+
+
+pdf("hcpc_factor_map.pdf",height = 6, width = 12)
+fviz_cluster(res.hcpc,
+             labelsize = 6, 
+             repel = TRUE,            # Avoid label overlapping
+             show.clust.cent = TRUE, # Show cluster centers
+             palette = "jco",         # Color palette see ?ggpubr::ggpar
+             ggtheme = theme_minimal(),
+             main = "Factor map"
+             )
+dev.off()
+
+
+tmp2 <- res.hcpc$desc.var$quanti
+for (i in 1:length(tmp2)) {
+  tmp2[[i]] <- data.frame(tmp2[[i]])
+  tmp2[[i]]$clust <- names(tmp2)[i]
+}
+tmp3 <- do.call(rbind.data.frame, tmp2[1:3])
+tmp3$feature <- stringr::str_split(rownames(tmp3), "\\.", simplify = T)[,2]
+write.csv(tmp3, file = "2clusters_hcpc.csv", row.names = F)
+
+write.csv(tmp2[[1]], "cluster1_hcpc.csv")
+write.csv(tmp2[[2]], "cluster2_hcpc.csv")
+# write.csv(tmp2[[3]], "cluster3_hcpc.csv")
+
+hcpc_data_table <- res.hcpc$data.clust
+# hcpc_data_table <- cbind(input["Record.id"], hcpc_data_table)
+write.csv(hcpc_data_table, file = "cluster_detail.csv")
+
+
+```
+
+#heatmap
+```{r}
+hcpc_data_table$clust <- as.factor(hcpc_data_table$clust)
+df <- hcpc_data_table[,c(101,1:100)]
+df[,-1] <- sapply(df[,-1], as.numeric)
+dats <- t(apply(df[,-1], 2, scale))
+colnames(dats) <- df$clust
+
+clust <- c(1,2)
+col_fun <- circlize::colorRamp2(seq(-4,4),c("#0D8CFF","#43A6FF","#5EB3FF","#93CCFF","#FFFFFF","#FFBBAA","#FF7755","#FF6039","#FF3300"))
+
+ht_list <- NULL
+for (i in 1:length(clust)) {
+  ht_list <- ht_list + Heatmap(dats[,colnames(dats) == clust[i]],
+        cluster_columns = T, cluster_rows = T,
+        # col = col_fun, 
+        row_names_gp = gpar(fontsize = 4),
+        row_title_gp = gpar(fontsize = 5),
+        row_title_rot = 0,
+        column_title = clust[i],
+        column_title_gp = gpar(fontsize=5),
+        column_names_gp = gpar(fontsize = 4))
+}
+pdf("hcpc_heatmap.pdf",width = 15,height = 6)
+draw(ht_list, show_heatmap_legend = F)
+dev.off()
+
+```
+```{r}
+# c1 <- read_delim("ORA_results-cluster1.tab")
+# c2 <- read_delim("ORA_results-cluster2.tab")
+# c3 <- read_delim("ORA_results-cluster3.tab")
+# 
+# 
+# write.csv(c1,"cluster1_enrichment.csv")
+# write.csv(c2,"cluster2_enrichment.csv")
+# write.csv(c3,"cluster3_enrichment.csv")
+
+
+```
+
+
+
+

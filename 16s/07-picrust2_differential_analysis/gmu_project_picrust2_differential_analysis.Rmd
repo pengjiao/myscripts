@@ -1,0 +1,300 @@
+---
+title: "sixth hospital humann3 dataset"
+author: ""
+date: "`r Sys.Date()`"
+output:
+  html_document:
+    theme: united
+    number_sections: no
+    toc: yes
+    toc_depth: 6
+    toc_float: true
+    self_contained: true
+    thumbnails: true
+    lightbox: true
+    gallery: true
+    use_bookdown: false
+    highlight: haddock
+---
+  
+```{r load packages, results='hide', message=F, warning=F,include=F}
+rm(list=ls())
+library(phyloseq)
+library(microbiome)
+library(tidyverse)
+library(metagMisc)
+library(dplyr)
+library(compositions)
+library(mixOmics)
+library(vegan)
+library(knitr)
+library(ggpubr)
+library(reshape2)
+library(DT)
+library(grid)
+library(ggplot2)
+library(ggpubr)
+library(showtext)
+library(gginnards)
+library(GO.db)
+library(PCAtools)
+library(flextable)
+library(officer)
+library(matrixStats)
+library(rstatix)
+library(patchwork)
+library(HTSSIP)
+```
+
+```{r set font, include=F}
+th <- theme_get()
+th_new <- th
+th_new$text$family = "sans"
+th_new$axis.title.x$family = "sans"
+th_new$axis.title.x.top$family = "sans"
+th_new$axis.title.y$family = "sans"
+th_new$axis.title.y.right$family = "sans"
+th_new$axis.text$family = "sans"
+th_new$legend.text$family = "sans"
+th_new$legend.title $family = "sans"
+th_new$plot.title$family = "sans"
+th_new$plot.subtitle$family = "sans"
+th_new$plot.caption$family = "sans"
+th_new$plot.tag$family = "sans"
+th_new$strip.text$family = "sans"
+
+theme_set(th_new)
+showtext_auto()
+```
+
+```{r set color , include=F}
+# color set
+mycols <<- c(
+  "#3cb44b", "#4363d8", "#e6194b","#ffe119", "#f58231",
+  "#911eb4", "#46f0f0", "#f032e6", "#bcf60c", "#fabebe",
+  "#008080", "#e6beff", "#9a6324", "#fffac8", "#800000",
+  "#aaffc3", "#808000", "#ffd8b1", "#000075", "#808080",
+  "#000000"
+)
+
+```
+
+```{r create folder, include=F,warning=F,message=F}
+dir.create("input")
+dir.create("output")
+```
+
+## Microbiota function 
+### STAMP-like extended plot
+```{r message=F,warning=F}
+# wilcox.test
+calwilcox <- function(input_abun,input_group,input_col,width,height,outname,device,ref){
+input_abun2 <- data.frame(input_abun,row.names = 1)
+  input_abun_tss <- apply(input_abun2,2, function(x) as.numeric(x)/sum(as.numeric(x)))
+  #input_abun_tss <- input_abun2
+  rownames(input_abun_tss) <- rownames(input_abun2)
+
+  data <- data.frame(t(input_abun_tss ))
+  #colnames(data) <- gsub("\\.+"," ",colnames(data))
+  data[] <- apply(data,2,as.numeric)
+  
+  input_group <- input_group[input_group$row_names %in% rownames(data),]
+  data1 <- merge(data,input_group,by.x=0,by.y=1)
+  colnames(data1)[ncol(data1)] <- "Group"
+  data1$Group <- as.factor(data1$Group)
+  data1$Group <- relevel(data1$Group,ref=ref)
+  data1$Group <- factor(data1$Group,levels = rev(levels(data1$Group)))
+  
+  diff <- data1 %>%
+      select_if(is.numeric) %>%
+      map_df(~broom::tidy(wilcox.test(.~Group,data = data1,conf.int =T,conf.level = .95)), .id = 'var')
+  
+  diff$adj <- p.adjust(diff$p.value,"BH")
+  write.csv(diff,file = paste0(substr(outname, 1,nchar(outname)-4),".csv"),quote = F,row.names = F)
+  diff <- diff %>% filter(p.value < 0.05)
+  
+  #diff <- diff %>% filter(adj < 0.1)
+  if(dim(diff)[1] == 0) {return("no sig at p.value =0.05")}
+  for (i in 1:nrow(diff)){
+    if (diff[i,]$estimate > diff[i,]$conf.high || diff[i,]$estimate < diff[i,]$conf.low){
+      diff[i,]$conf.high <- diff[i,]$estimate 
+      diff[i,]$conf.low <- diff[i,]$estimate 
+    }
+  }
+  diff <- diff[order(diff$p.value),]
+  
+  # prep data for plot
+  data2 <- data1
+  data2$Group <- relevel(data1$Group,ref=ref)
+  abun.bar <- data2[,c(diff$var,"Group")] %>%
+    gather(variable,value,-Group) %>%
+    group_by(variable,Group) %>%
+    summarise(Mean = mean(value))
+  test <- merge(abun.bar,diff,by.x=1,by.y=1)
+  test <- test[order(test$p.value),]
+  abun.bar <- test[,c("variable","Group","Mean")]
+  
+  diff.mean <- diff[,c("var","estimate","conf.low","conf.high","p.value","adj")]
+  diff.mean$Group <- c(ifelse(diff.mean$estimate >0,levels(data1$Group)[1],
+                              levels(data1$Group)[2]))
+  diff.mean <- merge(as.character(unique(abun.bar$variable)),diff.mean,by.x=1,by.y=1)
+  diff.mean <- diff.mean[order(diff.mean$p.value),]
+  colnames(diff.mean)[1] <- "var"
+  
+  cbbPalette <- input_col
+  abun.bar$variable <- factor(abun.bar$variable,levels = diff.mean$var)
+  
+  p1 <- ggplot(abun.bar,aes(variable,Mean,fill = Group)) +
+    scale_x_discrete(limits = levels(diff.mean$var)) +
+    coord_flip() +
+    xlab("") +
+    ylab("Mean proportion (%)") +
+    theme(panel.background = element_rect(fill = 'transparent'),
+          panel.grid = element_blank(),
+          axis.ticks.length = unit(0.4,"lines"),
+          axis.ticks = element_line(color='black'),
+          axis.line = element_line(colour = "black"),
+          axis.title.x=element_text(colour='black', size=12,face = "bold"),
+          axis.text=element_text(colour='black',size=10,face = "bold"),
+          legend.title=element_blank(),
+          legend.text=element_text(size=12,face = "bold",colour = "black",
+                                   margin = margin(r = 20)),
+          legend.position = "top",
+          legend.direction = "horizontal",
+          legend.key.width = unit(0.8,"cm"),
+          legend.key.height = unit(0.5,"cm"))
+  for (i in 1:(nrow(diff.mean) - 1)){
+    p1 <- p1 + annotate('rect', xmin = i+0.5, xmax = i+1.5, ymin = -Inf, ymax = Inf,
+                        fill = ifelse(i %% 2 == 0, 'white', 'gray95'))
+    }
+  
+  p1 <- p1 +  geom_bar(stat = "identity",position = "dodge",width = 0.7,colour = "black") +
+      scale_fill_manual(values=cbbPalette)
+
+  # scater plot
+  diff.mean$var <- factor(diff.mean$var,levels = levels(abun.bar$variable))
+  diff.mean$p.value <- signif(diff.mean$p.value,3)
+  diff.mean$p.value <- as.character(diff.mean$p.value)
+
+  p2 <- ggplot(diff.mean,aes(var,estimate,fill = Group)) +
+      theme(panel.background = element_rect(fill = 'transparent'),
+            panel.grid = element_blank(),
+            axis.ticks.length = unit(0.4,"lines"),
+            axis.ticks = element_line(color='black'),
+            axis.line = element_line(colour = "black"),
+            axis.title.x=element_text(colour='black', size=12,face = "bold"),
+            axis.text=element_text(colour='black',size=10,face = "bold"),
+            # axis.text.y = element_blank(),
+            legend.position = "none",
+            axis.line.y = element_blank(),
+            axis.ticks.y = element_blank(),
+            plot.title = element_text(size = 15,face = "bold",colour = "black",hjust = 0.5)) +
+      scale_x_discrete(limits = levels(diff.mean$var)) +
+      coord_flip() +
+      xlab("") +
+      ylab("Estimates") +
+      labs(title="95% confidence intervals")
+   
+  for (i in 1:(nrow(diff.mean) - 1)){
+      p2 <- p2 + annotate('rect', xmin = i+0.5, xmax = i+1.5, ymin = -Inf, ymax = Inf,
+                          fill = ifelse(i %% 2 == 0, 'white', 'gray95'))
+  }
+
+  p2 <- p2 +
+      geom_errorbar(aes(ymin = conf.low, ymax = conf.high),
+                     position = position_dodge(0.8),width = 0.5, size = 0.5) +
+      geom_point(shape = 21,size = 3) +
+      scale_fill_manual(values=cbbPalette) +
+      geom_hline(aes(yintercept = 0), linetype = 'dashed', color = 'black')
+  
+  p3 <- ggplot(diff.mean,aes(var,estimate,fill = Group)) +
+      geom_text(aes(y = 0,x = var),label = diff.mean$p.value,
+                hjust = 0,fontface = "bold",inherit.aes = FALSE,size = 3) +
+      geom_text(aes(x = nrow(diff.mean)/2+0.5,y = 0.3),label = "P-value",
+               srt = 90,fontface = "bold",size = 5) +
+      coord_flip() +
+      ylim(c(0,1)) +
+      theme(panel.background = element_blank(),
+            panel.grid = element_blank(),
+            axis.line = element_blank(),
+            axis.ticks = element_blank(),
+            axis.text = element_blank(),
+            axis.title = element_blank())
+  
+  p <- p1 + p3 + plot_layout(widths = c(4,3)) # ,ncol = 2
+  
+  if (dim(diff)[1]<=5 ){
+    height <- 3
+  } else if (dim(diff)[1] < 10) {
+    height <- 4
+  } else{ 
+    height <- 3+dim(diff)[1]/6
+  } 
+  
+  ggsave(p,filename = outname,device = device,width = width,height = height,dpi = 300,limitsize = F)
+  return(list(diff.mean = diff.mean, p = p, height = height))
+}
+```
+
+## Data collecting
+### metadata
+```{r load packages, results='hide', message=F, warning=F,include=F}
+phy <- readRDS("../data_processing/gmu_16S_phyloseq_59samples.rds")
+print(phy) # 3570 taxa and 59 samples
+
+metat <- sample_data(phy)
+dim(metat) # 59 10
+```
+
+## picrust2 kegg pathway
+```{r}
+pathway1 <- read.delim2("../06-picrust2/KEGG/picrust2_out_pipeline/KEGG_pathways_unstrat/path_abun_unstrat_descrip.tsv",row.names = 1,header = T)
+dim(pathway1) # 150 61
+
+pathway <- apply(pathway1[,-1],2,as.numeric)
+rownames(pathway) <- pathway1[,1]
+pathway <- pathway[rowSums(pathway) >0,]
+dim(pathway) # 150 60
+
+common_snames <- intersect(colnames(pathway),metat$SampleID)
+length(common_snames) # 59
+
+pathway <- pathway[,match(common_snames,colnames(pathway))]
+dim(pathway) # 150 59
+
+## filtering missing > 50%
+zero_per <- rowSums(pathway == 0)/ncol(pathway)
+# names(zero_per)[which(zero_per <= 0.5)] # 132
+pathway_used <- pathway[zero_per <= 0.5, ]
+dim(pathway_used) # 132 59
+
+pathway_name <- rownames(pathway_used)
+pathway_tss <- tss(pathway_used,2)
+write.table(cbind(pathway_name,pathway_used),"input/picrust2_kegg_pathway_data.spf",quote=F,row.names=FALSE,sep="\t")
+
+metadata <- metat[match(common_snames,metat$SampleID),]
+dim(metadata) # 59 10
+identical(colnames(pathway_used),metadata$SampleID) # TRUE
+out_metat <- data.frame(metadata) %>% dplyr::select(SampleID,Groups)
+write.table(out_metat,file = "input/metadata.tsv",quote = F,row.names = F,sep="\t")
+```
+
+### pairwise wilcoxon
+```{r}
+metadata$Groups <- gsub(" \\+ ","-",metadata$Groups)
+metadata$Groups <- factor(metadata$Groups,levels = c("Control","Model","Model_AC","Model_AC_GV971L","Model_AC_GV971H"))
+allcomb <- combn(levels(metadata$Groups),m = 2)
+colcomb <- combn(1:5,m=2)
+
+for(i in 1:ncol(allcomb)){
+    metat_tmp <- data.frame(metadata) %>% filter(Groups %in% allcomb[,i]) %>% dplyr::select(SampleID,Groups) %>% dplyr::rename(row_names = SampleID, Group = Groups) # 24 2
+    abun_tmp2 <-  data.frame(pathway_used[,match(metat_tmp$row_names,colnames(pathway_used))]) %>% tibble::rownames_to_column( "row_names") # 132 25
+    identical(colnames(abun_tmp2)[-1],metat_tmp$row_names) # TRUE
+    
+    pathway_results <- calwilcox(input_abun = abun_tmp2,input_group = metat_tmp ,input_col = mycols[c(2,1)] ,outname= paste0("output/picrust2_kegg_pathway_",allcomb[,i][1],"_vs_",allcomb[,i][2],"_p0.05.pdf"),ref=allcomb[,i][1],width = 15, height = 0,device = "pdf")
+
+}
+
+# ggsave(pathway_results$p,filename = "output/metacyc/metacyc_p0.01.pdf",device = "pdf", width = 12,height = 4,dpi = 300,limitsize = F)
+
+```

@@ -1,0 +1,86 @@
+---
+title: "PCA_or_PLS"
+author: ""
+date: "2021/11/1"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## library
+```{r}
+library(PCAtools)
+library(dplyr)
+library(factoextra)
+library(scatterplot3d)
+
+```
+
+## data
+```{r}
+load("../../../sixhosp_young_scs_aged/input/proteomics_input/SixHosp_NC_SCS1_Young_145subjects_proteomics_missing50Percent_logRatio_meta.RData")
+
+meta_df$Gender[meta_df$Gender == "female"] <- 2
+meta_df$Gender[meta_df$Gender == "male"] <- 1
+meta_df <- data.frame(meta_df)
+
+meta <- meta_df %>% 
+  select(sample_FACS, Age, Gender) %>%
+  mutate(
+    group = case_when(
+      Age > 20 & Age <= 30 ~ "20-30",
+      Age > 30 & Age <= 40 ~ "30-40",
+      Age > 40 & Age <= 50 ~ "40-50",
+      Age > 50 & Age <= 60 ~ "50-60",
+      Age > 60 & Age <= 70 ~ "60-70",
+      Age > 70 & Age <= 80 ~ "70-80",
+    )
+  )
+
+data <- t(data.frame(df))
+rownames(meta) <- meta$sample_FACS
+```
+
+## PCA
+```{r}
+res.pca <- prcomp(t(data), scale = TRUE)
+
+# fviz_pca_ind(res.pca,
+#              col.ind = meta$group, # color by groups
+#              palette = "Set1",
+#              addEllipses = F, # Concentration ellipses
+#              legend.title = "Groups",
+#              label = "none"
+#              )
+
+pca.res <- PCAtools::pca(data, metadata = meta, removeVar = 0.1, scale = T)
+
+pdf("PCA_10yearInterval.pdf", width = 7, height = 5.5)
+biplot(pca.res,
+       lab = '',
+       colby = 'group',
+       hline = 0, vline = 0,
+       legendPosition = 'right') +
+  scale_color_brewer(palette = "Set1")
+dev.off()
+
+colors <- brewer.pal(n = 6, name = "Set1")
+colors <- colors[as.numeric(as.factor(meta$group))]
+
+pdf("PCA_10yearInterval_3d.pdf", width = 7, height = 6)
+scatterplot3d(pca.res$rotated[,1:3],
+              main='PCA',type='p',
+              color = colors,
+              highlight.3d=F,
+              angle=35,
+              grid=T,box=T,
+              cex.symbols=1.5,
+              scale.y = 1,
+              pch=16)
+legend("right", legend = levels(as.factor(meta$group)),
+      col =  brewer.pal(n = 6, name = "Set1"), pch = 16)
+dev.off()
+```
+

@@ -1,0 +1,120 @@
+---
+title: "03_marker_gene_identification"
+author: ""
+date: "2022/10/20"
+output: 
+  html_document: 
+    toc: yes
+    toc_depth: 5
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE)
+```
+
+In order to aid the interpretation of the clustering results, it is helpful to identify genes that are contributing to the separation of cells into those clusters.
+The main approach to achieve this, is to identify genes that are differently expressed between clusters. 
+
+## Load library
+```{r}
+library(scuttle)
+library(scater)
+library(scran)
+library(pheatmap)
+library(tidyverse) # always load tidyverse after other packages
+```
+
+## Data prepare
+We will load two SingleCellExperiment objects generated in previous sections:
+
+The SCE with logcounts normalised within each batch generated in the Batch Correction section.
+The SCE with batch-corrected data integration using the batchelor::fastMNN() algorithm, including clusters covered in the Clustering section.
+
+```{r}
+# Parameters
+this.path <- "../Results/03_marker_gene_identification"
+bp.params <- MulticoreParam(workers = 20)
+set.seed(1234)
+dir.create(this.path)
+
+# normalised within batches without batch-integration correction
+uncorrected <- readRDS("../Results/02_normalization_and_dimensionality_reduction_clustering/DataIntegration_uncorrected_PCA_TSNE.RDS")
+rownames(uncorrected) <- uniquifyFeatureNames(rownames(uncorrected), rowData(uncorrected)$Symbol)
+
+# data corrected using batch integration with mutual nearest neighbours
+corrected <- readRDS("../Results/02_normalization_and_dimensionality_reduction_clustering/DataIntegration_MNN_out_clustering_dimensionreduction.RDS")
+rownames(corrected) <- uniquifyFeatureNames(rownames(corrected), rowData(corrected)$Symbol)
+
+# copy cluster assignments to the uncorrected object
+# first make sure that the cell names are in the same order
+all(colnames(uncorrected) == colnames(corrected))
+colData(uncorrected)$cluster_twostep <- factor(colData(corrected)$cluster_twostep)
+```
+
+## Identifying cluster marker genes
+
+Although we have defined our clusters based on the batch-corrected expression values, these should not be used for for gene-based analyses like marker gene detection. Instead, we should use the uncorrected (normalised) expression values for differential expression between clusters.
+
+Here, we use the Wilcoxon rank-sum test to perform pairwise comparisons between groups of observations.
+```{r}
+# Wilcoxon rank-sum test
+markers_wilcox_up <- findMarkers(
+  uncorrected, 
+  groups = uncorrected$cluster_twostep, # clusters to compare
+  block = uncorrected$cluster,    # covariates in statistical model
+  test.type = "wilcox", 
+  direction = "up"
+)
+
+markers_wilcox_down <- findMarkers(
+  uncorrected, 
+  groups = uncorrected$cluster_twostep, # clusters to compare
+  block = uncorrected$cluster,    # covariates in statistical model
+  test.type = "wilcox",
+  direction = "down"
+)
+# save(markers_wilcox_up, markers_wilcox_down, file = paste0(this.path, "/markers_gene_identification.RData"))
+# load(paste0(this.path, "/markers_gene_identification.RData"))
+
+for(i in 1:length(markers_wilcox_up)){
+  cluster.path <- paste0(this.path, "/Cluster_", i)
+  dir.create(cluster.path)
+  markers.up.df <- markers_wilcox_up[[i]]
+  plotExpression(uncorrected, 
+               features = rownames(markers.up.df)[1:6],
+               x = "cluster_twostep",
+               colour_by="cluster_twostep")
+  ggsave(paste0(cluster.path, "/up_expression_top6_violinplot.pdf"), width = 16, height = 14)
+  openxlsx::write.xlsx(markers.up.df, file = paste0(cluster.path, "/up_expression_byWilcoxon_results.xlsx"))
+  
+  markers.down.df <- markers_wilcox_down[[i]]
+  plotExpression(uncorrected, 
+               features = rownames(markers.down.df)[1:6],
+               x = "cluster_twostep",
+               colour_by="cluster_twostep")
+  ggsave(paste0(cluster.path, "/down_expression_top6_violinplot.pdf"), width = 16, height = 14)
+  openxlsx::write.xlsx(markers.down.df, file = paste0(cluster.path, "/down_expression_byWilcoxon_results.xlsx"))
+}
+
+
+for(i in 1:length(markers_wilcox_up)){
+  cluster.path <- paste0(this.path, "/Cluster_", i)
+  markers.up.df <- markers_wilcox_up[[i]]
+  pdf(paste0(cluster.path, "/up_expression_Top10byAUC_heatmap.pdf"), width = 10, height = 12)
+  plotHeatmap(uncorrected, 
+            features = rownames(markers.up.df)[markers.up.df$Top <= 10],
+            order_columns_by = c("cluster_twostep", "cluster"))
+ dev.off()
+  
+  markers.down.df <- markers_wilcox_down[[i]]
+  pdf(paste0(cluster.path, "/down_expression_Top10byAUC_heatmap.pdf"), width = 10, height = 12)
+  plotHeatmap(uncorrected, 
+            features = rownames(markers.up.df)[markers.up.df$Top <= 10],
+            order_columns_by = c("cluster_twostep", "cluster"))
+  dev.off()
+  
+}
+
+
+```
+

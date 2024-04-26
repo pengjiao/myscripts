@@ -1,0 +1,199 @@
+---
+title: 'Machine'
+author: ""
+date: '`r format(Sys.Date(), "%B %d, %Y")`'
+output:
+  html_document:
+    number_sections: no
+    toc: yes
+    toc_depth: 6
+    toc_float: true
+    self_contained: true
+    thumbnails: true
+    lightbox: true
+    gallery: true
+    use_bookdown: false
+    highlight: haddock
+type: post
+description: modified from https://github.com/rlbarter
+---
+
+
+```{r, echo=F, results='hide', message=F, warning=F,include=F}
+# load the relevant tidymodels libraries
+library(phyloseq)
+library(microbiome)
+library(tidyverse)
+library(compositions)
+library(knitr)
+library(ggpubr)
+library(DT)
+library(ComplexHeatmap)
+library(hsstan)
+library(healthcareai)
+# library(animalcules)
+library("yardstick")
+library(pROC)
+# source("pipline_function_16s.r" )
+`%+%` <- function(a,b) {paste0(a,b)}
+
+```
+
+```{r include=F}
+set.seed(1234)
+dir.create("../output/", recursive = TRUE)
+dir.create("../output/table", recursive = TRUE)
+dir.create("../output/results", recursive = TRUE)
+dir.create("../output/figure", recursive = TRUE)
+```
+
+
+```{r echo=F, results='hide', message=F, warning=F,include=F}
+
+# color set
+mycols <<- c(
+  "#e6194b", "#3cb44b", "#4363d8", "#ffe119", "#f58231",
+  "#911eb4", "#46f0f0", "#f032e6", "#bcf60c", "#fabebe",
+  "#008080", "#e6beff", "#9a6324", "#fffac8", "#800000",
+  "#aaffc3", "#808000", "#ffd8b1", "#000075", "#808080",
+  "#000000"
+)
+```
+
+# Data process
+
+```{r }
+load("../../input/processed/df_meta_metab_cytokine_immune_log_16s.RData")
+colnames(gut_meta_otu_table)[1]<-"Diagnosis"
+#color set
+mycols <<- c("#90C2D3", "#0B318F", "#C4780A", "#7E318E", "#9B0A33")
+mainvar.name<-"Diagnosis"
+covar.name<-c("Age","Sex")
+```
+
+
+```{r warning=F, message=F}
+metat<-gut_meta_otu_table
+batch_name_list <- paste0(metat[,mainvar.name] %>% unique(),collapse = "vs")
+
+
+for (b in c(1:length(batch_name_list))) {
+  # b=1
+  auc_record <-  as.data.frame(matrix(nrow=5,ncol=9))
+  batch_name <- batch_name_list[b]
+  new_omics_table <-metat
+
+  new_omics_table$Diagnosis <- as.factor(new_omics_table$Diagnosis)
+  new_omics_table[,mainvar.name]  <- as.factor(new_omics_table[,mainvar.name])
+  new_omics_table[,mainvar.name] <- relevel(new_omics_table[,mainvar.name] ,str_split(batch_name, pattern = "vs")[[1]][1])
+  
+  colnames(new_omics_table) <- gsub("\\.", "_", colnames(new_omics_table))
+
+
+
+  linear_regression_tmp <-  lm(Diagnosis ~ ., data = new_omics_table)
+  coefficients_tmp <- na.omit(linear_regression_tmp$coefficients %>% data.frame())
+  biomarker_filter <-row.names(coefficients_tmp)[4:length(row.names(coefficients_tmp))]
+  biomarker_filter_new <- c("Diagnosis","Age", "Sex",biomarker_filter)
+  new_omics_table <- dplyr::select(new_omics_table, biomarker_filter_new)
+  
+  # hsstan
+  options(mc.cores=10)
+  hs.biom <- hsstan(new_omics_table, as.formula(mainvar.name %+% " ~ " %+% paste0(covar.name,collapse = "+") ), penalized=biomarker_filter)
+  # hs.biom <- hsstan(new_omics_table, Diagnosis ~ Age + Gender, penalized=colnames(new_omics_table)[4:length(new_omics_table)])
+  sampler.stats(hs.biom)
+  set.seed(1)
+  sel.biom <- projsel(hs.biom, max.iters = 30)
+  DT::datatable(sel.biom)
+  
+  n <- 0
+  n_vect <- seq(5,30, 3)
+  for (k in c(1:length(n_vect))) {
+    n_index<- n_vect[k]
+    n_index_new <- n_index + 2
+    biomarker_select <- sel.biom$var[3:n_index_new]
+     new_omics_table_biomarker <- dplyr::select(new_omics_table, one_of(mainvar.name, biomarker_select))
+    ### Data Preparation
+    split_data <- split_train_test(d = new_omics_table_biomarker,
+                                 outcome = Diagnosis,
+                                 p = .7,
+                                 seed = 84105)
+  
+    prepped_training_data <- prep_data(split_data$train, outcome = Diagnosis,
+                                     center = TRUE, scale = TRUE,
+                                     collapse_rare_factors = FALSE)
+  # > Training new data prep recipe...
+  
+  
+    models_glmnet <- tune_models(d = prepped_training_data,
+                        outcome = Diagnosis,
+                        tune_depth = 25,
+                        positive_class = str_split(batch_name, pattern = "vs")[[1]][1],
+                        metric = "ROC", models = "glm")
+    ## prediction
+    
+    predictions <-
+    predict(models_glmnet, split_data$test, outcome_groups = TRUE )
+  # > Prepping data based on provided recipe
+  dir.create("../output/table/",recursive = T)
+  dir.create("../output/figure/",recursive = T)
+  dir.create("../output/results/",recursive = T)
+  write.csv(predictions, file = paste("../output/table/", batch_name, "_", n_index, "_",  "_regular_predictions_glmnet.csv"), row.names = FALSE)
+  plot(predictions)
+  pdf(paste("../output/figure/",batch_name, "_", n_index, "_", "_regular_machine_learning_predictions_glmnet.pdf", sep = ""), width = 9, height = 6)
+  plot(predictions)
+  dev.off()
+  coe_var <- interpret(models_glmnet)
+  plot(coe_var)
+  pdf(paste("../output/figure/",batch_name, "_", n_index, "_", "_regular_machine_learning_coe_var.pdf", sep = ""), width = 9, height = 7)
+  plot(coe_var)
+  dev.off()
+  write.csv(coe_var, file = paste("../output/table/", batch_name, "_", n_index, "_", "_regular_coe_var.csv"), row.names = FALSE)
+  
+  predictions$predicted_group <- relevel(predictions$predicted_group,str_split(batch_name, pattern = "vs")[[1]][1])
+  cm <- predictions %>% 
+    conf_mat(truth = Diagnosis, estimate = predicted_group)
+  p1 <- autoplot(cm, type = "heatmap")
+  print(p1)
+  pdf(paste("../output/figure/",batch_name, "_", n_index, "_", "_regular_machine_learning_confusion_matrix_glmnet.pdf", sep = ""),  width = 8, height = 6)
+  # autoplot(cm, type = "heatmap")
+  print(p1)
+  dev.off()
+  roc_curve <- roc_curve(predictions, Diagnosis,predicted_Diagnosis)
+  obj <- roc(predictions$Diagnosis, predictions$predicted_Diagnosis, ci=TRUE, plot =FALSE, levels = c(str_split(batch_name, pattern = "vs")[[1]][1], str_split(batch_name, pattern = "vs")[[1]][2]))
+  obj$ci
+  
+  auc <- round(as.numeric(str_split(obj$ci, pattern = ":")[[2]][1]), digits = 2)   
+  params_prediction <- confusionMatrix(predictions$predicted_group, 
+              predictions$Diagnosis, positive = str_split(batch_name, pattern = "vs")[[1]][1])
+  Accuracy  <- round(as.numeric(params_prediction$overall[1]), digits = 2)
+  Sensitivity  <- round(as.numeric(params_prediction$byClass[1]), digits = 2)
+  Specificity <- round(as.numeric(params_prediction$byClass[2]), digits = 2)
+  
+  auc_record[1, k] <- Sensitivity
+  auc_record[2, k] <- Specificity
+  auc_record[3, k] <- auc
+  auc_record[4, k] <- Accuracy
+  auc_record[5, k] <- paste(biomarker_select, collapse = ",")
+  
+  ci <- c(round(as.numeric(str_split(obj$ci, pattern = ":")[[1]][1]), digits = 2), round(as.numeric(str_split(obj$ci, pattern = ":")[[3]][1]), digits = 2))
+  label = paste("AUC=", auc, "[", ci[1], "-", ci[2], "]", sep = "")
+  p2 <- autoplot(roc_curve) + geom_text(aes(x=0.6, y=0, label = label), hjust = "centre", vjust = "bottom", size = 5)
+  print(p2)
+  
+  pdf(paste("../output/figure/",batch_name, "_", n_index, "_", "_regular_machine_learning_roc_curve_glmnet.pdf", sep = ""))
+  # autoplot(roc_curve) + geom_text(aes(x=0.6, y=0, label = label), hjust = "centre", vjust = "bottom", size = 5)
+  print(p2)
+  dev.off()
+  # save
+  dir.create("../output/RDS/",recursive = T)
+  save_models(models_glmnet, file = paste("../output/RDS/my_models_",batch_name, "_", n_index, "_",".RDS", sep = ""))
+  }
+  row_names <- c("sensitivity","specificity", "AUC", "accuracy", "features")
+  row.names(auc_record) <- row_names
+  colnames(auc_record) <- n_vect
+  write.csv(auc_record, file = paste("../output/results/immune_", batch_name, "_results.csv"))
+}
+
+```
+

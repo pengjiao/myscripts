@@ -1,0 +1,105 @@
+---
+title: "DCM_plots"
+author: ""
+date: "2021/12/2"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## library
+```{r}
+library(ggradar)
+library(ComplexHeatmap)
+library(corrplot)
+library(tibble)
+library(ggplot2)
+```
+
+# corr05 all features 
+```{r}
+dir.create("DCM_plots")
+thres <- 0.5
+ecm.input <- read.table("output_corr05_allfeatures/class-wise_centrality_matrix.txt")
+ecm.input <- rownames_to_column(ecm.input, var = "features")
+
+ecm.df <- subset(ecm.input, nmo_vs_control >thres)
+ecm.df <- ecm.df[,c("features", "nmo_vs_control")]
+
+df <- reshape2::melt(ecm.df)
+colnames(df)[3] <- "DCM"
+df$features <- factor(df$features, levels = ecm.df$features[order(ecm.df$nmo_vs_control, decreasing = F)])
+
+ggplot(df, aes(variable, features, col = DCM, size = DCM)) + 
+  geom_point() + 
+  scale_colour_gradient(low = "yellow", high = "red") +
+  xlab("") +
+  ylab("") +
+  theme_bw() +
+  theme(axis.text.x = element_text(angle = 60, hjust = 1, vjust = 1))
+ggsave("DCM_plots/dcm_nmo_vs_control_dotplot_corr05_all_features.pdf", width = 4, height = 5)
+
+
+## barplot 
+ggplot(df, aes(x = features, y=DCM, fill=DCM)) +
+  geom_bar(stat="identity")+scale_fill_gradient(low = "yellow", high = "red")+theme_bw()+ coord_flip()
+ggsave("DCM_plots/dcm_nmo_vs_control_barplot_corr05_all_features.pdf", width = 5, height = 3)
+```
+
+# corr06 all features 
+```{r}
+#dir.create("DCM_plots")
+thres <- 0.6
+ecm.input <- read.table("output_corr06_allfeatures/class-wise_centrality_matrix.txt")
+ecm.input <- rownames_to_column(ecm.input, var = "features")
+
+ecm.df <- subset(ecm.input, nmo_vs_control >thres)
+ecm.df <- ecm.df[,c("features", "nmo_vs_control")]
+
+df <- reshape2::melt(ecm.df)
+colnames(df)[3] <- "DCM"
+df$features <- factor(df$features, levels = ecm.df$features[order(ecm.df$nmo_vs_control, decreasing = F)])
+
+ggplot(df, aes(variable, features, col = DCM, size = DCM)) + 
+  geom_point() + 
+  scale_colour_gradient(low = "yellow", high = "red") +
+  xlab("") +
+  ylab("") +
+  theme_bw() +
+  theme(axis.text.x = element_text(angle = 60, hjust = 1, vjust = 1))
+ggsave("DCM_plots/dcm_nmo_vs_control_dotplot_corr06_all_features.pdf", width = 4, height = 4)
+
+ggplot(df, aes(x = features, y=DCM, fill=DCM)) +
+  geom_bar(stat="identity")+scale_fill_gradient(low = "yellow", high = "red")+theme_bw()+ coord_flip()
+ggsave("DCM_plots/dcm_nmo_vs_control_barplot_corr06_all_features.pdf", width = 4, height = 2.5)
+```
+
+# corr07 all features 
+```{r}
+#dir.create("DCM_plots")
+thres <- 0.7
+ecm.input <- read.table("output_corr07_allfeatures/class-wise_centrality_matrix.txt")
+ecm.input <- rownames_to_column(ecm.input, var = "features")
+
+ecm.df <- subset(ecm.input, nmo_vs_control >thres)
+ecm.df <- ecm.df[,c("features", "nmo_vs_control")]
+
+df <- reshape2::melt(ecm.df)
+colnames(df)[3] <- "DCM"
+df$features <- factor(df$features, levels = ecm.df$features[order(ecm.df$nmo_vs_control, decreasing = F)])
+
+ggplot(df, aes(variable, features, col = DCM, size = DCM)) + 
+  geom_point() + 
+  scale_colour_gradient(low = "yellow", high = "red") +
+  xlab("") +
+  ylab("") +
+  theme_bw() +
+  theme(axis.text.x = element_text(angle = 60, hjust = 1, vjust = 1))
+ggsave("DCM_plots/dcm_nmo_vs_control_dotplot_corr07_all_features.pdf", width = 4, height = 5)
+
+ggplot(df, aes(x = features, y=DCM, fill=DCM)) +
+  geom_bar(stat="identity")+scale_fill_gradient(low = "yellow", high = "red")+theme_bw()+ coord_flip()
+ggsave("DCM_plots/dcm_nmo_vs_control_barplot_corr07_all_features.pdf", width = 5, height = 2)
+```

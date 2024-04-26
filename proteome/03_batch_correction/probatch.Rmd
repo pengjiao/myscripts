@@ -1,0 +1,307 @@
+---
+title: "Untitled"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+```{r}
+library(proBatch)
+library(knitr)
+library(lubridate)
+library(stringr)
+require(dplyr)
+require(tibble)
+require(ggplot2)
+library(readxl)
+library(dplyr)
+library(tibble)
+library(stringr)
+library(PCAtools)
+```
+
+# deal with time
+```{r}
+df <- read.csv("../input/212_and_3_duplicated_samples_with_meta.csv") %>% data.frame()
+t1 <- readxl::read_excel("batch1_files.xlsx",col_names = F)
+t2 <- readxl::read_excel("batch2_files.xlsx",col_names = F)
+t <- rbind(t1,t2)
+sample <- df$X
+sample <- gsub("-", "_", sample)
+
+sample.1 <- str_split(t$...8, "_", 2, simplify = T)[,2]
+sample.1 <- sub(".raw", "", sample.1)
+t$sample <- sample.1
+
+time <- str_split(t$...7, " ", 2, simplify = T)[,2]
+t$time <- time
+t$year <- rep("2021", 328)
+colnames(t)[5] <- "month"
+colnames(t)[6] <- "day"
+t$month<- gsub("月","",t$month)
+#t$Date<-as.Date(with(df,paste(year,month,day,sep="-")),"%Y-%m-%d")
+date <- paste( t$year,t$month,t$day,sep="-")
+date <- paste(date, t$time) 
+t$Date <- as.POSIXlt(date)
+
+meta_time <- t %>%
+  select(sample, Date)
+meta_time$sample <- gsub("_","-", meta_time$sample)
+id <- match(df$X, meta_time$sample)
+meta_time <- meta_time[id,]
+df <- cbind(meta_time$Date, df)
+colnames(df)[1] <- "date"
+```
+
+# find 3 after dupliacted samples with meta
+```{r}
+#rownames(df) <- df$X
+#df <- df[,-2]
+x <- t[which(t$sample %in% c ("SH201905_441", "SH201905_459", "SH201905_466")),]
+x <- x[4:6,]
+df <- df[order(df$date,decreasing = F),]
+#df1 <- df1[-c(213:215),]
+df$date[213:215] <- x$Date
+```
+
+# find 2 duplicated before and after samples without meta
+```{r}
+y <- t[which(t$sample %in% c ("SH201905_443", "SH201905_444")),]
+d <- readxl::read_excel("../../sixhosp_aging_project_20210719/20210811/SHH6_GV_age_continuous/proteomics/212_samples_linear_regression/00_pca/209_with_10_duplicated_samples.xlsx") %>% data.frame()
+rownames(d) <- d[,1]
+d1 <- d[which(rownames(d) %in% c ("SH201905-443", "SH201905-444","SH201905-443-after","SH201905-444-after")),]
+d1 <- d1[c(3,4,1,2),]
+
+no <- df[1:4,]
+no$date <-y$Date
+no$X <-rownames(d1)
+no[,3:7] <- NA
+no$batch<- c(1,1,2,2)
+no[,9:461] <- d1[,3:455]
+
+```
+
+```{r}
+df1 <- rbind(df,no)
+
+```
+
+
+```{r}
+df1 <- df1[order(df1$date,decreasing = F),]
+df1$order <- c(seq(1:219))
+df1 <- df1[,c(462,1:461)]
+```
+
+
+# mean intensity
+```{r}
+#meta <- df1[,1:7]
+#meta$order <- c(seq(1:212))
+#meta$FullRunName <- rownames(meta)
+#meta$batch <- as.factor(meta$batch)
+#meta <- meta[,c(9,1:8)]
+#rownames(meta) <- NULL
+
+protein <- df1[,10:462]
+protein <- as.matrix(t(protein))
+
+mean <- apply(protein,2,mean)
+df1$mean <- mean
+df1 <- df1[,c(463,1:462)]
+summary(df1$mean)
+
+df1$batch <- as.factor(df1$batch)
+```
+
+
+# scatter plot
+```{r}
+ggplot(data=df1,aes(x=order,y=mean))+
+  geom_point(aes(color=batch))+
+  theme_bw()
+
+ggpubr::ggdotplot(df1, "order", "mean", fill = "batch", color = "batch")
+```
+
+# normalization
+```{r}
+# median normalization
+df2 <- t(df1[,11:463])
+colnames(df2) <- df1$X
+df2_norm = normalize_data_dm(df2,
+normalize_func = 'medianCentering')
+
+
+
+```
+
+
+
+
+```{r}
+df2.1 <- t(df2_norm)
+df2.1 <- cbind(df1[,c(2:4,10)],df2.1)
+mean <- apply(df2.1[,5:457],1,mean)
+df2.1$mean <- mean
+df2.1 <- df2.1[,c(458,1:457)]
+
+df1$media_norm_mean<- df2.1$mean
+```
+
+# scatter plot
+```{r}
+ggpubr::ggdotplot(df2.1, "order", "mean", fill = "batch", color = "batch")
+
+```
+
+# pca media nomalization data
+```{r}
+write.csv(df2.1,"media_norm_data.csv")
+df2.1 <-read.csv("media_norm_data.csv")
+df2.1 <- df2.1[,-1]
+meta_media_norm <- df2.1[,1:5]
+rownames(meta_media_norm) <- meta_media_norm$X
+media_dat <- t(df2.1[,6:458])
+colnames(media_dat) <- meta_media_norm$X
+media_dat <- as.data.frame(media_dat)
+meta_media_norm$batch <- as.character(meta_media_norm$batch)
+p1 <- PCAtools::pca(media_dat, meta_media_norm, scale = T)
+pdf("pca_batch_media_norm.pdf", width = 9, height = 6)
+plot1<- biplot(p1,
+       lab = '',
+       colby = 'batch',
+       title = "media",
+       hline = 0, vline = 0,
+       legendPosition = 'right')+
+     scale_colour_manual(values = c("royalblue","red2"))
+dev.off()
+
+
+```
+
+
+#quantile
+
+```{r}
+
+df2 <- t(df1[,11:463])
+colnames(df2) <- df1$X
+
+# quantile
+df2_norm = normalize_data_dm(df2,normalize_func = 'quantile')
+
+```
+
+```{r}
+df2.1 <- t(df2_norm)
+df2.1 <- cbind(df1[,c(2:4,10)],df2.1)
+mean <- apply(df2.1[,5:457],1,mean)
+df2.1$mean <- mean
+df2.1 <- df2.1[,c(458,1:457)]
+
+df1$quantile_mean<- df2.1$mean
+```
+
+
+# pca quantile data
+```{r}
+write.csv(df2.1,"quantile_data.csv")
+df2.1 <-read.csv("quantile_data.csv")
+df2.1 <- df2.1[,-1]
+meta_quantile <- df2.1[,1:5]
+rownames(meta_quantile) <- meta_quantile$X
+quantile_dat <- t(df2.1[,6:458])
+colnames(quantile_dat) <- meta_quantile$X
+quantile_dat <- as.data.frame(quantile_dat)
+meta_quantile$batch <- as.character(meta_quantile$batch)
+
+library(ggplot2)
+p <- PCAtools::pca(quantile_dat, meta_quantile, scale = T)
+#pdf("pca_batch_media_quantile.pdf", width = 9, height = 6)
+plot2 <- biplot(p,
+       lab = '',
+       colby = 'batch',
+       title = 'quantile',
+       hline = 0, vline = 0,
+       legendPosition = 'right')+
+     scale_colour_manual(values = c("royalblue","red2"))
+pdf("pca_batch_media_quantile.pdf", width = 9, height = 6)
+par(mfrow=c(1,2))
+plot1
+plot2
+dev.off()
+
+
+```
+
+# combat correction
+```{r}
+library(sva)
+batch1 <- df2.1$batch
+edata1 <- t(df2.1[,6:458])
+colnames(edata1) <-df2.1$X
+variable <- model.matrix(~1, data=df2.1)
+# # parametric adjustment
+combat_edata1 = ComBat(dat=edata1, batch=batch1, mod=NULL, par.prior=TRUE, prior.plots=FALSE)
+combat_edata1 <- as.data.frame(combat_edata1)
+#d_combat <- t(combat_edata1)
+#d_combat <- as.data.frame(cbind(df2.1$batch,d_combat))
+
+
+```
+
+
+```{r}
+# limma correction
+library(limma)
+combat_edata_2=removeBatchEffect(edata1, batch1)
+combat_edata_2 <- as.data.frame(combat_edata_2)
+```
+
+
+
+
+# pca
+```{r}
+library(ggplot2)
+p <- PCAtools::pca(combat_edata1, meta_media_norm, scale = T)
+
+
+
+pdf("pca_batch_limma.pdf", width = 9, height = 6)
+plot3 <- biplot(p,
+       lab = '',
+       colby = 'batch',
+       title = 'quantile_normalization_combat_correction',
+       hline = 0, vline = 0,
+       legendPosition = 'right')+
+     scale_colour_manual(values = c("royalblue","red2"))
+
+p1 <- PCAtools::pca(combat_edata_2, meta_media_norm, scale = T)
+
+
+pdf("pca_batch_limma.pdf", width = 9, height = 6)
+plot4 <- biplot(p1,
+       lab = '',
+       colby = 'batch',
+       title = 'quantile_normalization_limma_correction',
+       hline = 0, vline = 0,
+       legendPosition = 'right')+
+     scale_colour_manual(values = c("royalblue","red2"))
+plot4
+dev.off()
+```
+
+
+
+
+
+
+
+
+
+

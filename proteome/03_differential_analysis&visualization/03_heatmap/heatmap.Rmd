@@ -1,0 +1,58 @@
+---
+title: "heatmap"
+author: ""
+date: "2021/11/1"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## library
+```{r}
+library(ComplexHeatmap)
+```
+
+## data
+```{r}
+load("../../../../sixhosp_young_scs_aged/input/proteomics_input/SixHosp_NC_SCS1_Young_145subjects_proteomics_missing50Percent_logRatio_meta.RData")
+
+meta_df$Gender[meta_df$Gender == "female"] <- 2
+meta_df$Gender[meta_df$Gender == "male"] <- 1
+meta_df <- data.frame(meta_df)
+
+meta <- meta_df %>% 
+  select(sample_FACS, Age, Gender) %>%
+  mutate(
+    group = case_when(
+      Age > 20 & Age <= 30 ~ "20-30",
+      Age > 30 & Age <= 40 ~ "30-40",
+      Age > 40 & Age <= 50 ~ "40-50",
+      Age > 50 & Age <= 60 ~ "50-60",
+      Age > 60 & Age <= 70 ~ "60-70",
+      Age > 70 & Age <= 80 ~ "70-80",
+    )
+  )
+meta$group <- as.factor(meta$group)
+data <- t(data.frame(df))
+rownames(meta) <- meta$sample_FACS
+
+diff_input <- read_excel("../01_tables/linear_regression_age_table.xlsx")
+diff <- diff_input[diff_input$fdr < 0.01,]
+
+dat_sel <- data[diff$features,]
+```
+
+## heatmap
+```{r}
+pdf("lm_signif_fdr001.pdf", width = 12, height = 11)
+Heatmap(dat_sel,
+        column_split = meta$group,
+        cluster_column_slices = F,
+        column_names_gp = gpar(fontsize = 4),
+        row_names_gp = gpar(fontsize = 6))
+dev.off()
+```
+
+

@@ -1,0 +1,580 @@
+---
+title: "netcomi"
+author: "Green Valley Bioinformatics Core"
+date: "2021/9/2"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## library
+```{r}
+library(NetCoMi)
+library(readxl)
+library(rstatix)
+```
+
+## data
+```{r}
+meta_input <- read_excel("../../input/mmse_categorized_5groups_20200302/six-hospital_NC_SCD1_aMCI_AD_SHJW_AD_MMSE_5groups_20200302.xlsx")
+
+data_input <- read_excel("../../input/rawdata_metabolite/SixHosp_JW_322subjects_metabolites_NC_SCD1_aMCI_AD1_AD2_Above20percentMissingDeleted_imputed_by_group_knnVIM.xlsx")
+data_input <- data_input[match(meta_input$sample_FACS, data_input$sample_FACS),]
+
+dat <- cbind(meta_input[c("sample_FACS", "Group", "Gender", "Age")],
+              data_input[,-1])
+df <- subset(dat, select = -c(sample_FACS, Gender, Age))
+## parameters
+groups <- c("NC", "SCD1", "aMCI", "AD_1", "AD_2")
+omic_name <- "metabolite"
+
+df <- df[,c(1,71:448)]
+```
+
+## visulization
+
+### nc
+```{r}
+group_sel <- groups[1]
+df_sel <- df[df$Group == group_sel, -1]
+cor_df <- cor(log2(df_sel + 0.0001), method = "pearson")
+cor_res <- cor_df
+
+# 0.7
+net_single <- netConstruct(data = cor_res,
+                           dataType = "correlation",
+                           measure = "euclidean",
+                           filtTax = "none",
+                           filtSamp = "none",
+                           normMethod = "none", 
+                           zeroMethod = "none",
+                           sparsMethod = "threshold",
+                           thresh = 0.7,
+                           dissFunc = "signed",
+                           verbose = 3,
+                           seed = 123456)
+
+props_single <- netAnalyze(net_single, 
+                           clustMethod = "cluster_fast_greedy")
+
+pdf(paste0(group_sel, "_network_cutoff07_fia.pdf"), width = 8, height = 6)
+plot(props_single, 
+          nodeColor = "cluster", 
+          nodeSize = "eigenvector",
+          repulsion = 0.8,
+          rmSingles = T,
+          labelScale = T,
+          nodeSizeSpread = 3,
+          title1 = paste0("Network on metabolites in ", group_sel), 
+          showTitle = T,
+          cexTitle = 2.3)
+legend(0.6, 1.0, cex = 1.2, title = "estimated association:",
+       legend = c("+","-"), lty = 1, lwd = 3, col = c("#009900","red"), 
+       bty = "n", horiz = TRUE)
+dev.off()
+
+# 0.8
+net_single <- netConstruct(data = cor_res,
+                           dataType = "correlation",
+                           measure = "euclidean",
+                           filtTax = "none",
+                           filtSamp = "none",
+                           normMethod = "none", 
+                           zeroMethod = "none",
+                           sparsMethod = "threshold",
+                           thresh = 0.8,
+                           dissFunc = "signed",
+                           verbose = 3,
+                           seed = 123456)
+
+props_single <- netAnalyze(net_single, 
+                           clustMethod = "cluster_fast_greedy")
+
+pdf(paste0(group_sel, "_network_cutoff08_fia.pdf"), width = 8, height = 6)
+plot(props_single, 
+          nodeColor = "cluster", 
+          nodeSize = "eigenvector",
+          repulsion = 0.8,
+          rmSingles = T,
+          labelScale = T,
+          nodeSizeSpread = 3,
+          title1 = paste0("Network on metabolites in ", group_sel), 
+          showTitle = T,
+          cexTitle = 2.3)
+legend(0.6, 1.0, cex = 1.2, title = "estimated association:",
+       legend = c("+","-"), lty = 1, lwd = 3, col = c("#009900","red"), 
+       bty = "n", horiz = TRUE)
+dev.off()
+
+# 0.9
+net_single <- netConstruct(data = cor_res,
+                           dataType = "correlation",
+                           measure = "euclidean",
+                           filtTax = "none",
+                           filtSamp = "none",
+                           normMethod = "none", 
+                           zeroMethod = "none",
+                           sparsMethod = "threshold",
+                           thresh = 0.9,
+                           dissFunc = "signed",
+                           verbose = 3,
+                           seed = 123456)
+
+props_single <- netAnalyze(net_single, 
+                           clustMethod = "cluster_fast_greedy")
+
+pdf(paste0(group_sel, "_network_cutoff09_fia.pdf"), width = 8, height = 6)
+plot(props_single, 
+          nodeColor = "cluster", 
+          nodeSize = "eigenvector",
+          repulsion = 0.8,
+          rmSingles = T,
+          labelScale = T,
+          nodeSizeSpread = 3,
+          title1 = paste0("Network on metabolites in ", group_sel), 
+          showTitle = T,
+          cexTitle = 2.3)
+legend(0.6, 1.0, cex = 1.2, title = "estimated association:",
+       legend = c("+","-"), lty = 1, lwd = 3, col = c("#009900","red"), 
+       bty = "n", horiz = TRUE)
+dev.off()
+```
+
+
+
+### scd
+```{r}
+group_sel <- groups[2]
+df_sel <- df[df$Group == group_sel, -1]
+cor_df <- cor(log2(df_sel + 0.0001), method = "pearson")
+cor_res <- cor_df
+
+# 0.7
+net_single <- netConstruct(data = cor_res,
+                           dataType = "correlation",
+                           measure = "euclidean",
+                           filtTax = "none",
+                           filtSamp = "none",
+                           normMethod = "none", 
+                           zeroMethod = "none",
+                           sparsMethod = "threshold",
+                           thresh = 0.7,
+                           dissFunc = "signed",
+                           verbose = 3,
+                           seed = 123456)
+
+props_single <- netAnalyze(net_single, 
+                           clustMethod = "cluster_fast_greedy")
+
+pdf(paste0(group_sel, "_network_cutoff07_fia.pdf"), width = 8, height = 6)
+plot(props_single, 
+          nodeColor = "cluster", 
+          nodeSize = "eigenvector",
+          repulsion = 0.8,
+          rmSingles = T,
+          labelScale = T,
+          nodeSizeSpread = 3,
+          title1 = paste0("Network on metabolites in ", group_sel), 
+          showTitle = T,
+          cexTitle = 2.3)
+legend(0.6, 1.0, cex = 1.2, title = "estimated association:",
+       legend = c("+","-"), lty = 1, lwd = 3, col = c("#009900","red"), 
+       bty = "n", horiz = TRUE)
+dev.off()
+
+# 0.8
+net_single <- netConstruct(data = cor_res,
+                           dataType = "correlation",
+                           measure = "euclidean",
+                           filtTax = "none",
+                           filtSamp = "none",
+                           normMethod = "none", 
+                           zeroMethod = "none",
+                           sparsMethod = "threshold",
+                           thresh = 0.8,
+                           dissFunc = "signed",
+                           verbose = 3,
+                           seed = 123456)
+
+props_single <- netAnalyze(net_single, 
+                           clustMethod = "cluster_fast_greedy")
+
+pdf(paste0(group_sel, "_network_cutoff08_fia.pdf"), width = 8, height = 6)
+plot(props_single, 
+          nodeColor = "cluster", 
+          nodeSize = "eigenvector",
+          repulsion = 0.8,
+          rmSingles = T,
+          labelScale = T,
+          nodeSizeSpread = 3,
+          title1 = paste0("Network on metabolites in ", group_sel), 
+          showTitle = T,
+          cexTitle = 2.3)
+legend(0.6, 1.0, cex = 1.2, title = "estimated association:",
+       legend = c("+","-"), lty = 1, lwd = 3, col = c("#009900","red"), 
+       bty = "n", horiz = TRUE)
+dev.off()
+
+# 0.9
+net_single <- netConstruct(data = cor_res,
+                           dataType = "correlation",
+                           measure = "euclidean",
+                           filtTax = "none",
+                           filtSamp = "none",
+                           normMethod = "none", 
+                           zeroMethod = "none",
+                           sparsMethod = "threshold",
+                           thresh = 0.9,
+                           dissFunc = "signed",
+                           verbose = 3,
+                           seed = 123456)
+
+props_single <- netAnalyze(net_single, 
+                           clustMethod = "cluster_fast_greedy")
+
+pdf(paste0(group_sel, "_network_cutoff09_fia.pdf"), width = 8, height = 6)
+plot(props_single, 
+          nodeColor = "cluster", 
+          nodeSize = "eigenvector",
+          repulsion = 0.8,
+          rmSingles = T,
+          labelScale = T,
+          nodeSizeSpread = 3,
+          title1 = paste0("Network on metabolites in ", group_sel), 
+          showTitle = T,
+          cexTitle = 2.3)
+legend(0.6, 1.0, cex = 1.2, title = "estimated association:",
+       legend = c("+","-"), lty = 1, lwd = 3, col = c("#009900","red"), 
+       bty = "n", horiz = TRUE)
+dev.off()
+```
+
+
+
+### amci
+```{r}
+group_sel <- groups[3]
+df_sel <- df[df$Group == group_sel, -1]
+cor_df <- cor(log2(df_sel + 0.0001), method = "pearson")
+cor_res <- cor_df
+
+# 0.7
+net_single <- netConstruct(data = cor_res,
+                           dataType = "correlation",
+                           measure = "euclidean",
+                           filtTax = "none",
+                           filtSamp = "none",
+                           normMethod = "none", 
+                           zeroMethod = "none",
+                           sparsMethod = "threshold",
+                           thresh = 0.7,
+                           dissFunc = "signed",
+                           verbose = 3,
+                           seed = 123456)
+
+props_single <- netAnalyze(net_single, 
+                           clustMethod = "cluster_fast_greedy")
+
+pdf(paste0(group_sel, "_network_cutoff07_fia.pdf"), width = 8, height = 6)
+plot(props_single, 
+          nodeColor = "cluster", 
+          nodeSize = "eigenvector",
+          repulsion = 0.8,
+          rmSingles = T,
+          labelScale = T,
+          nodeSizeSpread = 3,
+          title1 = paste0("Network on metabolites in ", group_sel), 
+          showTitle = T,
+          cexTitle = 2.3)
+legend(0.6, 1.0, cex = 1.2, title = "estimated association:",
+       legend = c("+","-"), lty = 1, lwd = 3, col = c("#009900","red"), 
+       bty = "n", horiz = TRUE)
+dev.off()
+
+# 0.8
+net_single <- netConstruct(data = cor_res,
+                           dataType = "correlation",
+                           measure = "euclidean",
+                           filtTax = "none",
+                           filtSamp = "none",
+                           normMethod = "none", 
+                           zeroMethod = "none",
+                           sparsMethod = "threshold",
+                           thresh = 0.8,
+                           dissFunc = "signed",
+                           verbose = 3,
+                           seed = 123456)
+
+props_single <- netAnalyze(net_single, 
+                           clustMethod = "cluster_fast_greedy")
+
+pdf(paste0(group_sel, "_network_cutoff08_fia.pdf"), width = 8, height = 6)
+plot(props_single, 
+          nodeColor = "cluster", 
+          nodeSize = "eigenvector",
+          repulsion = 0.8,
+          rmSingles = T,
+          labelScale = T,
+          nodeSizeSpread = 3,
+          title1 = paste0("Network on metabolites in ", group_sel), 
+          showTitle = T,
+          cexTitle = 2.3)
+legend(0.6, 1.0, cex = 1.2, title = "estimated association:",
+       legend = c("+","-"), lty = 1, lwd = 3, col = c("#009900","red"), 
+       bty = "n", horiz = TRUE)
+dev.off()
+
+# 0.9
+net_single <- netConstruct(data = cor_res,
+                           dataType = "correlation",
+                           measure = "euclidean",
+                           filtTax = "none",
+                           filtSamp = "none",
+                           normMethod = "none", 
+                           zeroMethod = "none",
+                           sparsMethod = "threshold",
+                           thresh = 0.9,
+                           dissFunc = "signed",
+                           verbose = 3,
+                           seed = 123456)
+
+props_single <- netAnalyze(net_single, 
+                           clustMethod = "cluster_fast_greedy")
+
+pdf(paste0(group_sel, "_network_cutoff09_fia.pdf"), width = 8, height = 6)
+plot(props_single, 
+          nodeColor = "cluster", 
+          nodeSize = "eigenvector",
+          repulsion = 0.8,
+          rmSingles = T,
+          labelScale = T,
+          nodeSizeSpread = 3,
+          title1 = paste0("Network on metabolites in ", group_sel), 
+          showTitle = T,
+          cexTitle = 2.3)
+legend(0.6, 1.0, cex = 1.2, title = "estimated association:",
+       legend = c("+","-"), lty = 1, lwd = 3, col = c("#009900","red"), 
+       bty = "n", horiz = TRUE)
+dev.off()
+```
+
+
+
+### ad1
+```{r}
+group_sel <- groups[4]
+df_sel <- df[df$Group == group_sel, -1]
+cor_df <- cor(log2(df_sel + 0.0001), method = "pearson")
+cor_res <- cor_df
+
+# 0.7
+net_single <- netConstruct(data = cor_res,
+                           dataType = "correlation",
+                           measure = "euclidean",
+                           filtTax = "none",
+                           filtSamp = "none",
+                           normMethod = "none", 
+                           zeroMethod = "none",
+                           sparsMethod = "threshold",
+                           thresh = 0.7,
+                           dissFunc = "signed",
+                           verbose = 3,
+                           seed = 123456)
+
+props_single <- netAnalyze(net_single, 
+                           clustMethod = "cluster_fast_greedy")
+
+pdf(paste0(group_sel, "_network_cutoff07_fia.pdf"), width = 8, height = 6)
+plot(props_single, 
+          nodeColor = "cluster", 
+          nodeSize = "eigenvector",
+          repulsion = 0.8,
+          rmSingles = T,
+          labelScale = T,
+          nodeSizeSpread = 3,
+          title1 = paste0("Network on metabolites in ", group_sel), 
+          showTitle = T,
+          cexTitle = 2.3)
+legend(0.6, 1.0, cex = 1.2, title = "estimated association:",
+       legend = c("+","-"), lty = 1, lwd = 3, col = c("#009900","red"), 
+       bty = "n", horiz = TRUE)
+dev.off()
+
+# 0.8
+net_single <- netConstruct(data = cor_res,
+                           dataType = "correlation",
+                           measure = "euclidean",
+                           filtTax = "none",
+                           filtSamp = "none",
+                           normMethod = "none", 
+                           zeroMethod = "none",
+                           sparsMethod = "threshold",
+                           thresh = 0.8,
+                           dissFunc = "signed",
+                           verbose = 3,
+                           seed = 123456)
+
+props_single <- netAnalyze(net_single, 
+                           clustMethod = "cluster_fast_greedy")
+
+pdf(paste0(group_sel, "_network_cutoff08_fia.pdf"), width = 8, height = 6)
+plot(props_single, 
+          nodeColor = "cluster", 
+          nodeSize = "eigenvector",
+          repulsion = 0.8,
+          rmSingles = T,
+          labelScale = T,
+          nodeSizeSpread = 3,
+          title1 = paste0("Network on metabolites in ", group_sel), 
+          showTitle = T,
+          cexTitle = 2.3)
+legend(0.6, 1.0, cex = 1.2, title = "estimated association:",
+       legend = c("+","-"), lty = 1, lwd = 3, col = c("#009900","red"), 
+       bty = "n", horiz = TRUE)
+dev.off()
+
+# 0.9
+net_single <- netConstruct(data = cor_res,
+                           dataType = "correlation",
+                           measure = "euclidean",
+                           filtTax = "none",
+                           filtSamp = "none",
+                           normMethod = "none", 
+                           zeroMethod = "none",
+                           sparsMethod = "threshold",
+                           thresh = 0.9,
+                           dissFunc = "signed",
+                           verbose = 3,
+                           seed = 123456)
+
+props_single <- netAnalyze(net_single, 
+                           clustMethod = "cluster_fast_greedy")
+
+pdf(paste0(group_sel, "_network_cutoff09_fia.pdf"), width = 8, height = 6)
+plot(props_single, 
+          nodeColor = "cluster", 
+          nodeSize = "eigenvector",
+          repulsion = 0.8,
+          rmSingles = T,
+          labelScale = T,
+          nodeSizeSpread = 3,
+          title1 = paste0("Network on metabolites in ", group_sel), 
+          showTitle = T,
+          cexTitle = 2.3)
+legend(0.6, 1.0, cex = 1.2, title = "estimated association:",
+       legend = c("+","-"), lty = 1, lwd = 3, col = c("#009900","red"), 
+       bty = "n", horiz = TRUE)
+dev.off()
+```
+
+
+
+### ad2
+```{r}
+group_sel <- groups[5]
+df_sel <- df[df$Group == group_sel, -1]
+cor_df <- cor(log2(df_sel + 0.0001), method = "pearson")
+cor_res <- cor_df
+
+# 0.7
+net_single <- netConstruct(data = cor_res,
+                           dataType = "correlation",
+                           measure = "euclidean",
+                           filtTax = "none",
+                           filtSamp = "none",
+                           normMethod = "none", 
+                           zeroMethod = "none",
+                           sparsMethod = "threshold",
+                           thresh = 0.7,
+                           dissFunc = "signed",
+                           verbose = 3,
+                           seed = 123456)
+
+props_single <- netAnalyze(net_single, 
+                           clustMethod = "cluster_fast_greedy")
+
+pdf(paste0(group_sel, "_network_cutoff07_fia.pdf"), width = 8, height = 6)
+plot(props_single, 
+          nodeColor = "cluster", 
+          nodeSize = "eigenvector",
+          repulsion = 0.8,
+          rmSingles = T,
+          labelScale = T,
+          nodeSizeSpread = 3,
+          title1 = paste0("Network on metabolites in ", group_sel), 
+          showTitle = T,
+          cexTitle = 2.3)
+legend(0.6, 1.0, cex = 1.2, title = "estimated association:",
+       legend = c("+","-"), lty = 1, lwd = 3, col = c("#009900","red"), 
+       bty = "n", horiz = TRUE)
+dev.off()
+
+# 0.8
+net_single <- netConstruct(data = cor_res,
+                           dataType = "correlation",
+                           measure = "euclidean",
+                           filtTax = "none",
+                           filtSamp = "none",
+                           normMethod = "none", 
+                           zeroMethod = "none",
+                           sparsMethod = "threshold",
+                           thresh = 0.8,
+                           dissFunc = "signed",
+                           verbose = 3,
+                           seed = 123456)
+
+props_single <- netAnalyze(net_single, 
+                           clustMethod = "cluster_fast_greedy")
+
+pdf(paste0(group_sel, "_network_cutoff08_fia.pdf"), width = 8, height = 6)
+plot(props_single, 
+          nodeColor = "cluster", 
+          nodeSize = "eigenvector",
+          repulsion = 0.8,
+          rmSingles = T,
+          labelScale = T,
+          nodeSizeSpread = 3,
+          title1 = paste0("Network on metabolites in ", group_sel), 
+          showTitle = T,
+          cexTitle = 2.3)
+legend(0.6, 1.0, cex = 1.2, title = "estimated association:",
+       legend = c("+","-"), lty = 1, lwd = 3, col = c("#009900","red"), 
+       bty = "n", horiz = TRUE)
+dev.off()
+
+# 0.9
+net_single <- netConstruct(data = cor_res,
+                           dataType = "correlation",
+                           measure = "euclidean",
+                           filtTax = "none",
+                           filtSamp = "none",
+                           normMethod = "none", 
+                           zeroMethod = "none",
+                           sparsMethod = "threshold",
+                           thresh = 0.9,
+                           dissFunc = "signed",
+                           verbose = 3,
+                           seed = 123456)
+
+props_single <- netAnalyze(net_single, 
+                           clustMethod = "cluster_fast_greedy")
+
+pdf(paste0(group_sel, "_network_cutoff09_fia.pdf"), width = 8, height = 6)
+plot(props_single, 
+          nodeColor = "cluster", 
+          nodeSize = "eigenvector",
+          repulsion = 0.8,
+          rmSingles = T,
+          labelScale = T,
+          nodeSizeSpread = 3,
+          title1 = paste0("Network on metabolites in ", group_sel), 
+          showTitle = T,
+          cexTitle = 2.3)
+legend(0.6, 1.0, cex = 1.2, title = "estimated association:",
+       legend = c("+","-"), lty = 1, lwd = 3, col = c("#009900","red"), 
+       bty = "n", horiz = TRUE)
+dev.off()
+```
+

@@ -1,0 +1,356 @@
+---
+title: "05_differential_expression_analysis"
+author: ""
+date: "2022/10/21"
+output: 
+  html_document: 
+    toc: yes
+    toc_depth: 5
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE)
+```
+
+## Load library
+```{r}
+library(SingleCellExperiment)
+library(dplyr)
+library(ggplot2)
+library(muscat)
+library(purrr)
+library(BiocParallel)
+library(limma)
+library(UpSetR)
+
+```
+
+## Data
+```{r}
+# Parameters
+this.path <- "../Results/05_differential_expression_analysis"
+bp.params <- MulticoreParam(workers = 20)
+set.seed(1234)
+dir.create(this.path)
+
+# Import sce object before data integration
+uncorrected <- readRDS("../Results/02_normalization_and_dimensionality_reduction_clustering/DataIntegration_uncorrected_PCA_TSNE.RDS")
+
+# Import sce object after data integration by fastMNN
+corrected <- readRDS("../Results/04_cell_type_annotation/DataIntegration_MNN_out_clustering_dimensionreduction_annotationbySingleR.RDS")
+
+# Add cell types onto uncorrected data
+uncorrected$cluster_id <- corrected$pruned.labels
+
+# Remove not annotated cells
+sce <- uncorrected[,!is.na(uncorrected$cluster_id)]
+rownames(sce) <- rowData(sce)$Symbol
+sce$group_id <- make.names(sce$cluster)
+sce$sample_id <- sce$Sample
+colData(sce) <- colData(sce)[,c("sample_id", "group_id", "cluster_id")]
+sce$group_id <- factor(sce$group_id, levels = c("SHHD", "X1", "X2"))
+sce$cluster_id <- as.factor(sce$cluster_id)
+
+# Reshape metadata of sce for MDS plot
+tab.sce <- data.frame("sample_id" = colData(sce)$sample_id, 
+                         "group_id" = colData(sce)$group_id)
+tab.exp <- tab.sce  %>% 
+  group_by(sample_id, group_id) %>%
+  summarise(cells = n()) %>% 
+  arrange(group_id)
+
+sce$sample_id <- factor(sce$sample_id,levels = tab.exp$sample_id)
+metadata(sce) <- list(experiment_info = tab.exp)
+```
+
+## Differential expression analysis
+```{r}
+# Aggregation of single-cell to pseudobulk data
+pb <- aggregateData(sce,
+    assay = "counts", fun = "sum",
+    by = c("cluster_id", "sample_id"))
+
+# Pseudobulk-level MDS plot
+pb_mds <- pbMDS(pb)
+pb_mds
+ggsave(paste0(this.path, "/Pseudobulk_level_MDS_plot.pdf"), width = 7, height = 5)
+
+# construct design & contrast matrix
+ei <- metadata(sce)$experiment_info
+mm <- model.matrix(~ 0 + ei$group_id)
+dimnames(mm) <- list(ei$sample_id, levels(ei$group_id))
+contrast <- makeContrasts(X1-SHHD, X2-SHHD, X2-X1, levels = c("SHHD", "X1", "X2"))
+
+# run DS analysis
+res <- pbDS(pb, 
+     design = mm, 
+     contrast = contrast,
+     method = "DESeq2",
+     BPPARAM = bp.params)
+```
+
+
+### Comparison 1
+```{r}
+# access results table for 1st comparison
+comp <- names(res$table)[1]
+dir.create(paste0(this.path, "/", comp))
+tbl <- res$table[[1]]
+
+# filter FDR < 5%, abs(logFC) > 1 & sort by adj. p-value
+tbl_fil <- lapply(tbl, function(u) {
+  u <- dplyr::filter(u, p_adj.loc < 0.05, abs(logFC) > 1)
+  dplyr::arrange(u, p_adj.loc)
+})
+
+# nb. of DS genes & % of total by cluster
+n_de <- vapply(tbl_fil, nrow, numeric(1))
+p_de <- format(n_de / nrow(sce) * 100, digits = 3)
+data.frame("#DS" = n_de, "%DS" = p_de, check.names = FALSE)
+
+# UpSet plot: How many DE genes are shared between clusters?
+de_gs_by_k <- map(tbl_fil, "gene")
+pdf(paste0(this.path, "/",comp, "/Between_cluster_concordance_upsetplot.pdf"), width = 8, height = 5)
+upset(fromList(de_gs_by_k), nsets=5)
+dev.off()
+
+# pull top-10 DS genes across all clusters
+top10 <- bind_rows(tbl_fil) %>% 
+  top_n(10, dplyr::desc(p_adj.loc)) %>% 
+  pull("gene")
+
+# for ea. gene in 'top10', plot t-SNE colored by its expression 
+## wrapper to prettify reduced dimension plots
+.plot_dr <- function(sce, dr, col)
+  plotReducedDim(sce, dimred = dr, colour_by = col) +
+    guides(fill = guide_legend(override.aes = list(alpha = 1, size = 3))) +
+    theme_minimal() + theme(aspect.ratio = 1)
+
+## downsample to max. 500 cells per cluster
+cs_by_k <- split(colnames(sce), sce$cluster_id)
+cs500 <- unlist(sapply(cs_by_k, function(u) 
+  sample(u, min(length(u), 500))))
+
+ps <- lapply(top10, function(g)
+  .plot_dr(sce[, cs500], "TSNE", g) + 
+    ggtitle(g) + theme(legend.position = "none"))
+
+# arrange plots
+plot_grid(plotlist = ps, ncol = 4, align = "vh")
+ggsave(paste0(this.path, "/",comp, "/DStop10_allclusters_tsne_plot.pdf"), width = 12, height = 9)
+
+# top-10 DS genes per cluster
+cell.filtered <- c("Astrocytes", "Chondrocytes","DC","Endothelial cells","Eosinophils","Epithelial cells", "HSC","Pericytes","Skeletal muscle")
+for (i in levels(sce$cluster_id)[!levels(sce$cluster_id) %in% cell.filtered]) {
+  dir.create(paste0(this.path, "/", i))
+  ph <- pbHeatmap(sce, res, top_n = 10, k = i)
+  pdf(paste0(this.path, "/",comp, "/", i, "/top10_DS_fdr005_log2FC1_heatmap.pdf"), width = 5, height = 4)
+  ComplexHeatmap::draw(ph)
+  dev.off()
+}
+
+pdf(paste0(this.path, "/",comp, "/top5_allclusters_heatmap.pdf"), width=5.5, height=11)
+pbHeatmap(sce, res, top_n = 5, k = levels(sce$cluster_id)[!levels(sce$cluster_id) %in% cell.filtered])
+dev.off()
+
+for (i in levels(sce$cluster_id)[!levels(sce$cluster_id) %in% cell.filtered]){
+  features.df <- tbl_fil[[i]]$gene
+  if(length(features.df) > 6){
+    plotExpression(sce[,sce$cluster_id == i],
+                 features = features.df[seq_len(6)],
+                 x = "sample_id", colour_by = "group_id", ncol = 3) +
+      guides(fill = guide_legend(override.aes = list(size = 5, alpha = 1))) +
+      theme(axis.text.x = element_text(angle = 45, hjust = 1))
+    ggsave(paste0(this.path, "/", i, "/top6_DS_expressionplot.pdf"), width = 8, height = 6.5)
+  }else{
+    plotExpression(sce[,sce$cluster_id == i],
+                 features = features.df[seq_len(length(features.df))],
+                 x = "sample_id", colour_by = "group_id", ncol = 3) +
+      guides(fill = guide_legend(override.aes = list(size = 5, alpha = 1))) +
+      
+      theme(axis.text.x = element_text(angle = 45, hjust = 1))
+    ggsave(paste0(this.path, "/",comp, "/", i, "/top6_DS_expressionplot.pdf"), width = 8, height = 6.5)
+  }
+}
+
+for (i in levels(sce$cluster_id)[!levels(sce$cluster_id) %in% cell.filtered]){
+  openxlsx::write.xlsx(tbl[[i]], file = paste0(this.path, "/",comp, "/", i, "/Deseq2_results.xlsx")) 
+}
+
+```
+
+
+### Comparison 2
+```{r}
+# access results table for 1st comparison
+comp <- names(res$table)[2]
+dir.create(paste0(this.path, "/", comp))
+tbl <- res$table[[2]]
+
+# filter FDR < 5%, abs(logFC) > 1 & sort by adj. p-value
+tbl_fil <- lapply(tbl, function(u) {
+  u <- dplyr::filter(u, p_adj.loc < 0.05, abs(logFC) > 1)
+  dplyr::arrange(u, p_adj.loc)
+})
+
+# nb. of DS genes & % of total by cluster
+n_de <- vapply(tbl_fil, nrow, numeric(1))
+p_de <- format(n_de / nrow(sce) * 100, digits = 3)
+data.frame("#DS" = n_de, "%DS" = p_de, check.names = FALSE)
+
+# UpSet plot: How many DE genes are shared between clusters?
+de_gs_by_k <- map(tbl_fil, "gene")
+pdf(paste0(this.path, "/",comp, "/Between_cluster_concordance_upsetplot.pdf"), width = 8, height = 5)
+upset(fromList(de_gs_by_k), nsets=5)
+dev.off()
+
+# pull top-10 DS genes across all clusters
+top10 <- bind_rows(tbl_fil) %>% 
+  top_n(10, dplyr::desc(p_adj.loc)) %>% 
+  pull("gene")
+
+# for ea. gene in 'top10', plot t-SNE colored by its expression 
+## wrapper to prettify reduced dimension plots
+.plot_dr <- function(sce, dr, col)
+  plotReducedDim(sce, dimred = dr, colour_by = col) +
+    guides(fill = guide_legend(override.aes = list(alpha = 1, size = 3))) +
+    theme_minimal() + theme(aspect.ratio = 1)
+
+## downsample to max. 500 cells per cluster
+cs_by_k <- split(colnames(sce), sce$cluster_id)
+cs500 <- unlist(sapply(cs_by_k, function(u) 
+  sample(u, min(length(u), 500))))
+
+ps <- lapply(top10, function(g)
+  .plot_dr(sce[, cs500], "TSNE", g) + 
+    ggtitle(g) + theme(legend.position = "none"))
+
+# arrange plots
+plot_grid(plotlist = ps, ncol = 4, align = "vh")
+ggsave(paste0(this.path, "/",comp, "/DStop10_allclusters_tsne_plot.pdf"), width = 12, height = 9)
+
+# top-10 DS genes per cluster
+cell.filtered <- c("Astrocytes", "Chondrocytes","DC","Endothelial cells","Eosinophils","Epithelial cells", "HSC","Pericytes","Skeletal muscle")
+for (i in levels(sce$cluster_id)[!levels(sce$cluster_id) %in% cell.filtered]) {
+  dir.create(paste0(this.path, "/",comp, "/", i))
+  ph <- pbHeatmap(sce, res, top_n = 10, k = i)
+  pdf(paste0(this.path, "/",comp, "/", i, "/top10_DS_fdr005_log2FC1_heatmap.pdf"), width = 5, height = 4)
+  ComplexHeatmap::draw(ph)
+  dev.off()
+}
+
+pdf(paste0(this.path, "/",comp, "/top5_allclusters_heatmap.pdf"), width=5.5, height=11)
+pbHeatmap(sce, res, top_n = 5, k = levels(sce$cluster_id)[!levels(sce$cluster_id) %in% cell.filtered])
+dev.off()
+
+for (i in levels(sce$cluster_id)[!levels(sce$cluster_id) %in% cell.filtered]){
+  features.df <- tbl_fil[[i]]$gene
+  if(length(features.df) > 6){
+    plotExpression(sce[,sce$cluster_id == i],
+                 features = features.df[seq_len(6)],
+                 x = "sample_id", colour_by = "group_id", ncol = 3) +
+      guides(fill = guide_legend(override.aes = list(size = 5, alpha = 1))) +
+      theme(axis.text.x = element_text(angle = 45, hjust = 1))
+    ggsave(paste0(this.path, "/",comp, "/", i, "/top6_DS_expressionplot.pdf"), width = 8, height = 6.5)
+  }else{
+    plotExpression(sce[,sce$cluster_id == i],
+                 features = features.df[seq_len(length(features.df))],
+                 x = "sample_id", colour_by = "group_id", ncol = 3) +
+      guides(fill = guide_legend(override.aes = list(size = 5, alpha = 1))) +
+      
+      theme(axis.text.x = element_text(angle = 45, hjust = 1))
+    ggsave(paste0(this.path, "/",comp, "/", i, "/top6_DS_expressionplot.pdf"), width = 8, height = 6.5)
+  }
+   openxlsx::write.xlsx(tbl[[i]], file = paste0(this.path, "/",comp, "/", i, "/Deseq2_results.xlsx")) 
+}
+
+
+```
+
+### Comparison 2
+```{r}
+# access results table for 1st comparison
+comp <- names(res$table)[3]
+dir.create(paste0(this.path, "/", comp))
+tbl <- res$table[[3]]
+
+# filter FDR < 5%, abs(logFC) > 1 & sort by adj. p-value
+tbl_fil <- lapply(tbl, function(u) {
+  u <- dplyr::filter(u, p_adj.loc < 0.1, abs(logFC) > 0)
+  dplyr::arrange(u, p_adj.loc)
+})
+
+# nb. of DS genes & % of total by cluster
+n_de <- vapply(tbl_fil, nrow, numeric(1))
+p_de <- format(n_de / nrow(sce) * 100, digits = 3)
+data.frame("#DS" = n_de, "%DS" = p_de, check.names = FALSE)
+
+# UpSet plot: How many DE genes are shared between clusters?
+de_gs_by_k <- map(tbl_fil, "gene")
+pdf(paste0(this.path, "/",comp, "/Between_cluster_concordance_upsetplot.pdf"), width = 8, height = 5)
+upset(fromList(de_gs_by_k), nsets=5)
+dev.off()
+
+# pull top-10 DS genes across all clusters
+top10 <- bind_rows(tbl_fil) %>% 
+  top_n(10, dplyr::desc(p_adj.loc)) %>% 
+  pull("gene")
+
+# for ea. gene in 'top10', plot t-SNE colored by its expression 
+## wrapper to prettify reduced dimension plots
+.plot_dr <- function(sce, dr, col)
+  plotReducedDim(sce, dimred = dr, colour_by = col) +
+    guides(fill = guide_legend(override.aes = list(alpha = 1, size = 3))) +
+    theme_minimal() + theme(aspect.ratio = 1)
+
+## downsample to max. 500 cells per cluster
+cs_by_k <- split(colnames(sce), sce$cluster_id)
+cs500 <- unlist(sapply(cs_by_k, function(u) 
+  sample(u, min(length(u), 500))))
+
+ps <- lapply(top10, function(g)
+  .plot_dr(sce[, cs500], "TSNE", g) + 
+    ggtitle(g) + theme(legend.position = "none"))
+
+# arrange plots
+plot_grid(plotlist = ps, ncol = 4, align = "vh")
+ggsave(paste0(this.path, "/",comp, "/DStop10_allclusters_tsne_plot.pdf"), width = 12, height = 9)
+
+# top-10 DS genes per cluster
+cell.filtered <- c("Astrocytes", "Chondrocytes","DC","Endothelial cells","Eosinophils","Epithelial cells", "HSC","Pericytes","Skeletal muscle")
+for (i in levels(sce$cluster_id)[!levels(sce$cluster_id) %in% cell.filtered]) {
+  dir.create(paste0(this.path, "/",comp, "/", i))
+  ph <- pbHeatmap(sce, res, top_n = 10, k = i)
+  pdf(paste0(this.path, "/",comp, "/", i, "/top10_DS_fdr01_log2FC0_heatmap.pdf"), width = 5, height = 4)
+  ComplexHeatmap::draw(ph)
+  dev.off()
+}
+
+pdf(paste0(this.path, "/",comp, "/top5_allclusters_heatmap.pdf"), width=5.5, height=11)
+pbHeatmap(sce, res, top_n = 5, k = levels(sce$cluster_id)[!levels(sce$cluster_id) %in% cell.filtered])
+dev.off()
+
+for (i in levels(sce$cluster_id)[!levels(sce$cluster_id) %in% cell.filtered]){
+  features.df <- tbl_fil[[i]]$gene
+  if(length(features.df) > 6){
+    plotExpression(sce[,sce$cluster_id == i],
+                 features = features.df[seq_len(6)],
+                 x = "sample_id", colour_by = "group_id", ncol = 3) +
+      guides(fill = guide_legend(override.aes = list(size = 5, alpha = 1))) +
+      theme(axis.text.x = element_text(angle = 45, hjust = 1))
+    ggsave(paste0(this.path, "/",comp, "/", i, "/top6_DS_expressionplot.pdf"), width = 8, height = 6.5)
+  }
+  if(length(features.df) > 0){
+    plotExpression(sce[,sce$cluster_id == i],
+                 features = features.df[seq_len(length(features.df))],
+                 x = "sample_id", colour_by = "group_id", ncol = 3) +
+      guides(fill = guide_legend(override.aes = list(size = 5, alpha = 1))) +
+      
+      theme(axis.text.x = element_text(angle = 45, hjust = 1))
+    ggsave(paste0(this.path, "/",comp, "/", i, "/top6_DS_expressionplot.pdf"), width = 8, height = 6.5)
+  }
+   openxlsx::write.xlsx(tbl[[i]], file = paste0(this.path, "/",comp, "/", i, "/Deseq2_results.xlsx")) 
+}
+
+```
+

@@ -1,0 +1,61 @@
+---
+title: "data_preprocess"
+author: ""
+date: "1/24/2022"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# library
+```{r}
+library(readxl)
+library(dplyr)
+library(VIM)
+```
+
+# load data
+```{r}
+dat <- read.delim("../input/proteinGroups.txt")
+```
+
+# data clean up
+```{r}
+# 该过程是为了清洗掉False hits，如Potential.contaminant，Reverse，Only.identified.by.site和Qvalue < 0.01
+df <-  dat %>% dplyr::filter(Reverse != "+") %>% 
+  dplyr:: filter(Only.identified.by.site != "+") %>% 
+  dplyr:: filter(Potential.contaminant != "+")
+# there is a column indicating the confidence of the protein identification. 
+# In our case, that is Q.value, which represents the probability that the protein is a false hit. 
+# A typical cutoff is set at 0.01. Fortunately, MaxQuant takes care of this operation and all Q values are below the threshold.
+df$Q.value <- as.numeric(df$Q.value)
+df <- df %>%
+  dplyr:: filter(Q.value < 0.01)
+summary(as.numeric(df$Q.value))
+```
+# data imputation
+```{r}
+intensity.names <- grep("^LFQ.intensity", colnames(df), value = TRUE)
+data <- df[,colnames(df) %in% intensity.names]
+data[data == 0] <- NA
+rownames(data) <- make.names(df$Gene.names,unique = TRUE)
+na_per <- rowSums(is.na(data))/length(intensity.names)
+per_cut <- 0.5
+dat1 <- data[na_per <= per_cut,]
+d <- log2(dat1)
+d1 <- t(d)
+imp <- VIM::kNN(d1, k=10, imp_var=F)
+
+names <- sub("^LFQ.intensity.","", colnames(d))
+rownames(imp) <- names
+imp$sample <- names
+imp <- imp[,c(429,1:428)]
+#write_csv(imp, "ZS_100_sample_proteomics_QC_delete_50_percent_missing_knn_impute_log.csv")
+```
+
+
+
+
+

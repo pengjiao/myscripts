@@ -1,0 +1,606 @@
+---
+title: "Netcomi_single"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+# Define phylum colors
+
+phylcol <- c('#e6194B', '#3cb44b',  '#4363d8', '#f58231', '#42d4f4', '#f032e6', '#fabed4', '#469990', '#dcbeff', '#9A6324', '#800000', '#aaffc3','#ffe119', '#000075', '#a9a9a9', '#000000')
+barplot(1:16,col=phylcol)
+set.seed(123456)
+```
+
+
+
+```{r echo=F, results='hide', message=F, warning=F,include=F}
+# some function
+ordered_phy<-function(phy,group){
+  phy.meta<-meta(phy)
+  phy.meta$gp <-as.factor(phy.meta[,group]) # add a new column gp
+  sample_data(phy)<-phy.meta
+  grp_caterogy<-levels(phy.meta$gp)
+  obj_list<-list()
+  
+  for (cat_name in grp_caterogy){
+    input_cat_name <<- cat_name 
+    phy_sub <- subset_samples(phy,gp == input_cat_name)
+    obj_list<-c(obj_list,phy_sub)
+  }
+  order_phy <-  do.call(merge_phyloseq,obj_list) # merge phyloseq object
+  return(order_phy)
+}
+```
+
+
+```{r include=FALSE}
+library(NetCoMi)
+library(kableExtra)
+library(microbiome)
+phyloseq_raw<-readRDS('../../data_processing/ageing_project_16S_136samples_raw_phyloseq.rds')
+# phyloseq_<-convertSeq2ASV(phyloseq_)
+
+```
+
+```{r}
+metat_tmp <- meta(phyloseq_raw)
+metat_tmp$group3<-cut(metat_tmp$age,c(20,40,60,80),c("20-40", "40-60", "60-80"),ordered_result = T)
+metat_tmp$group6<-cut(metat_tmp$age,c(20,30,40,50,60,70,80),c("20-30Y", "30-40Y", "40-50Y", "50-60Y", "60-70Y", "70-80Y"),ordered_result = T)
+sample_data(phyloseq_raw)<-metat_tmp
+```
+ 
+
+ 
+ 
+ 
+# 20-40
+```{r}
+ggroups<-"20-40"
+phyloseq_raw_n <-NULL
+phyloseq_raw_n<-subset_samples(phyloseq_raw ,group3 == ggroups )
+```
+
+# prevalence
+```{r}
+phyloseq_core_n <- core(phyloseq_raw_n, detection = 5, prevalence = 0.3)
+```
+ 
+# change name in tax
+```{r}
+colnames(phyloseq_core_n@tax_table) <- c('Rank2','Rank3','Rank4','Rank5','Rank6','Rank7','Rank1')
+
+tax.df<-phyloseq_core_n@tax_table %>%data.frame()
+tax.df$Rank2 <- paste0('P__',tax.df$Rank2)
+tax.df$Rank3 <- paste0('c__',tax.df$Rank3)
+tax.df$Rank4 <- paste0('o__',tax.df$Rank4)
+tax.df$Rank5 <- paste0('f__',tax.df$Rank5)
+tax.df$Rank6 <- paste0('g__',tax.df$Rank6)
+
+tax_table(phyloseq_core_n)<-tax.df %>% as.matrix()
+```
+ 
+
+## make a netcomi
+```{r}
+# Agglomerate to genus level
+amgut_asv <- phyloseq_core_n
+# amgut_asv <- phyloseq::tax_glom(phyloseq_core_n, taxrank = "Rank6")
+taxtab <- amgut_asv@tax_table@.Data
+
+# Find undefined taxa (in this data set, unknowns occur only up to Rank5)
+miss_f <- which(taxtab[, "Rank5"] == "f__NA")
+miss_g <- which(taxtab[, "Rank6"] == "g__NA")
+
+# Number unspecified genera
+taxtab[miss_f, "Rank5"] <- paste0("f__", 1:length(miss_f))
+taxtab[miss_g, "Rank6"] <- paste0("g__", 1:length(miss_g))
+
+# Find duplicate genera
+dupl_g <- which(duplicated(taxtab[, "Rank6"]) |
+                  duplicated(taxtab[, "Rank6"], fromLast = TRUE))
+
+for(i in seq_along(taxtab)){
+  # The next higher non-missing rank is assigned to unspecified genera
+  if(i %in% miss_f && i %in% miss_g){
+    taxtab[i, "Rank6"] <- paste0(taxtab[i, "Rank6"], "(", taxtab[i, "Rank4"], ")")
+  } else if(i %in% miss_g){
+    taxtab[i, "Rank6"] <- paste0(taxtab[i, "Rank6"], "(", taxtab[i, "Rank5"], ")")
+  }
+  
+  # Family names are added to duplicate genera
+  if(i %in% dupl_g){
+    taxtab[i, "Rank6"] <- paste0(taxtab[i, "Rank6"], "(", taxtab[i, "Rank5"], ")")
+  }
+}
+
+amgut_asv@tax_table@.Data <- taxtab
+rownames(amgut_asv@otu_table@.Data) <- taxtab[, "Rank6"]
+
+# Network construction and analysis
+net_single3 <- netConstruct(amgut_asv, 
+                            measure = "pearson",
+                            zeroMethod = "multRepl",
+                            normMethod = "TSS", 
+                            sparsMethod = "threshold", 
+                            thresh = 0.3, 
+                            seed=123,
+                            verbose = 3)
+
+```
+
+## plot 
+```{r fig.width=30,fig.height=30}
+props_single3 <- netAnalyze(net_single3, clustMethod = "cluster_fast_greedy")
+```
+
+
+```{r fig.width=30,fig.height=30}
+# Get phyla names from the taxonomic table created before
+phyla <- as.factor(gsub("p__", "", taxtab[, "Rank2"]))
+names(phyla) <- taxtab[, "Rank6"]
+
+plot(props_single3,
+     layout = "layout_with_fr",
+     repulsion = 0.6,
+     shortenLabels = "simple",
+     charToRm = "g__",
+     labelScale = FALSE,
+     nodeTransp = 10,
+     rmSingles = TRUE,
+     nodeFilter ="none",
+     nodeFilterPar = 20, #change the number of node
+     nodeSize = "TSS",
+     nodeSizeSpread = 4,
+     nodeColor = "feature", 
+     featVecCol = phyla, 
+     colorVec =  phylcol,
+     posCol = "red", 
+     negCol = "blue",
+     edgeFilter="none" , #change the number of edge
+     edgeFilterPar=0.2,
+     edgeTranspLow = 0,
+     edgeTranspHigh = 40,
+     cexNodes = 2,
+     cexLabels = 2,
+     cexHubLabels = 2.5,
+     labelLength=0,
+     title1 = paste0("Network on genus level with Pearson correlations (",ggroups ,')'), 
+     showTitle = TRUE,
+     seed = 123,
+     cexTitle = 2.3
+     )
+
+# Colors used in the legend should be equally transparent as in the plot
+phylcol_transp <- NetCoMi:::colToTransp(phylcol, 10)
+
+legend(-1.2, 1.2, cex = 2, pt.cex = 2.5, title = "Phylum:", 
+       legend=levels(phyla), col = phylcol_transp, bty = "n", pch = 16) 
+
+legend(0.7, 1.1, cex = 2.2, title = "estimated correlation:",
+       legend = c("+","-"), lty = 1, lwd = 3, col = c("red","blue"), 
+       bty = "n", horiz = TRUE)
+```
+
+
+
+## save
+```{r fig.height=30, fig.width=30, include=FALSE}
+pdf(paste0("out.result/","NetCoMi_",ggroups,".pdf"), width = 30, height = 30)
+  
+
+plot(props_single3,
+     layout = "layout_with_fr",
+     repulsion = 0.6,
+     shortenLabels = "simple",
+     charToRm = "g__",
+     labelScale = FALSE,
+     nodeTransp = 10,
+     rmSingles = TRUE,
+     # nodeFilter ="none",
+     # nodeFilterPar = 20, #change the number of node
+     # nodeSize = "TSS",
+     # nodeSizeSpread = 4,
+     nodeColor = "feature", 
+     featVecCol = phyla, 
+     colorVec =  phylcol,
+     posCol = "red", 
+     negCol = "blue",
+     # edgeFilter="none" , #change the number of edge
+     # edgeFilterPar=0.2,
+     # edgeTranspLow = 0,
+     # edgeTranspHigh = 40,
+     # cexNodes = 2,
+     # cexLabels = 2,
+     # cexHubLabels = 2.5,
+     labelLength=0,
+     title1 = paste0("Network on genus level with Pearson correlations (",ggroups ,')'), 
+     showTitle = TRUE,
+     seed = 123,
+     cexTitle = 2.3
+     )
+
+
+# Colors used in the legend should be equally transparent as in the plot
+phylcol_transp <- NetCoMi:::colToTransp(phylcol, 60)
+
+legend(-1.2, 1.2, cex = 2, pt.cex = 2.5, title = "Phylum:", 
+       legend=levels(phyla), col = phylcol_transp, bty = "n", pch = 16) 
+
+legend(0.7, 1.1, cex = 2.2, title = "estimated correlation:",
+       legend = c("+","-"), lty = 1, lwd = 3, col = c("red","blue"), 
+       bty = "n", horiz = TRUE)
+
+
+  dev.off()
+```
+
+
+
+ 
+ 
+# 40-60
+```{r}
+ggroups<-"40-60"
+phyloseq_raw_n <-NULL
+phyloseq_raw_n<-subset_samples(phyloseq_raw ,group3 == ggroups )
+```
+
+# prevalence
+```{r}
+phyloseq_core_n <- core(phyloseq_raw_n, detection = 5, prevalence = 0.3)
+```
+ 
+# change name in tax
+```{r}
+colnames(phyloseq_core_n@tax_table) <- c('Rank2','Rank3','Rank4','Rank5','Rank6','Rank7','Rank1')
+
+tax.df<-phyloseq_core_n@tax_table %>%data.frame()
+tax.df$Rank2 <- paste0('P__',tax.df$Rank2)
+tax.df$Rank3 <- paste0('c__',tax.df$Rank3)
+tax.df$Rank4 <- paste0('o__',tax.df$Rank4)
+tax.df$Rank5 <- paste0('f__',tax.df$Rank5)
+tax.df$Rank6 <- paste0('g__',tax.df$Rank6)
+
+tax_table(phyloseq_core_n)<-tax.df %>% as.matrix()
+```
+ 
+
+## make a netcomi
+```{r}
+# Agglomerate to genus level
+amgut_asv <- phyloseq_core_n
+# amgut_asv <- phyloseq::tax_glom(phyloseq_core_n, taxrank = "Rank6")
+taxtab <- amgut_asv@tax_table@.Data
+
+# Find undefined taxa (in this data set, unknowns occur only up to Rank5)
+miss_f <- which(taxtab[, "Rank5"] == "f__NA")
+miss_g <- which(taxtab[, "Rank6"] == "g__NA")
+
+# Number unspecified genera
+taxtab[miss_f, "Rank5"] <- paste0("f__", 1:length(miss_f))
+taxtab[miss_g, "Rank6"] <- paste0("g__", 1:length(miss_g))
+
+# Find duplicate genera
+dupl_g <- which(duplicated(taxtab[, "Rank6"]) |
+                  duplicated(taxtab[, "Rank6"], fromLast = TRUE))
+
+for(i in seq_along(taxtab)){
+  # The next higher non-missing rank is assigned to unspecified genera
+  if(i %in% miss_f && i %in% miss_g){
+    taxtab[i, "Rank6"] <- paste0(taxtab[i, "Rank6"], "(", taxtab[i, "Rank4"], ")")
+  } else if(i %in% miss_g){
+    taxtab[i, "Rank6"] <- paste0(taxtab[i, "Rank6"], "(", taxtab[i, "Rank5"], ")")
+  }
+  
+  # Family names are added to duplicate genera
+  if(i %in% dupl_g){
+    taxtab[i, "Rank6"] <- paste0(taxtab[i, "Rank6"], "(", taxtab[i, "Rank5"], ")")
+  }
+}
+
+amgut_asv@tax_table@.Data <- taxtab
+rownames(amgut_asv@otu_table@.Data) <- taxtab[, "Rank6"]
+
+# Network construction and analysis
+net_single3 <- netConstruct(amgut_asv, 
+                            measure = "pearson",
+                            zeroMethod = "multRepl",
+                            normMethod = "TSS", 
+                            sparsMethod = "threshold", 
+                            thresh = 0.3, 
+                            seed=123,
+                            verbose = 3)
+
+```
+
+## plot 
+```{r fig.width=30,fig.height=30}
+props_single3 <- netAnalyze(net_single3, clustMethod = "cluster_fast_greedy")
+```
+
+
+```{r fig.width=30,fig.height=30}
+# Get phyla names from the taxonomic table created before
+phyla <- as.factor(gsub("p__", "", taxtab[, "Rank2"]))
+names(phyla) <- taxtab[, "Rank6"]
+
+plot(props_single3,
+     layout = "layout_with_fr",
+     repulsion = 0.6,
+     shortenLabels = "simple",
+     charToRm = "g__",
+     labelScale = FALSE,
+     nodeTransp = 10,
+     rmSingles = TRUE,
+     # nodeFilter ="none",
+     # nodeFilterPar = 20, #change the number of node
+     # nodeSize = "TSS",
+     # nodeSizeSpread = 4,
+     nodeColor = "feature", 
+     featVecCol = phyla, 
+     colorVec =  phylcol,
+     posCol = "red", 
+     negCol = "blue",
+     # edgeFilter="none" , #change the number of edge
+     # edgeFilterPar=0.2,
+     # edgeTranspLow = 0,
+     # edgeTranspHigh = 40,
+     # cexNodes = 2,
+     # cexLabels = 2,
+     # cexHubLabels = 2.5,
+     labelLength=0,
+     title1 = paste0("Network on genus level with Pearson correlations (",ggroups ,')'), 
+     showTitle = TRUE,
+     seed = 123,
+     cexTitle = 2.3
+     )
+
+# Colors used in the legend should be equally transparent as in the plot
+phylcol_transp <- NetCoMi:::colToTransp(phylcol, 60)
+
+legend(-1.2, 1.2, cex = 2, pt.cex = 2.5, title = "Phylum:", 
+       legend=levels(phyla), col = phylcol_transp, bty = "n", pch = 16) 
+
+legend(0.7, 1.1, cex = 2.2, title = "estimated correlation:",
+       legend = c("+","-"), lty = 1, lwd = 3, col = c("red","blue"), 
+       bty = "n", horiz = TRUE)
+```
+
+
+
+## save
+```{r fig.height=30, fig.width=30, include=FALSE}
+pdf(paste0("out.result/","NetCoMi_",ggroups,".pdf"), width = 30, height = 30)
+  
+
+plot(props_single3,
+     layout = "layout_with_fr",
+     repulsion = 0.6,
+     shortenLabels = "simple",
+     charToRm = "g__",
+     labelScale = FALSE,
+     nodeTransp = 10,
+     rmSingles = TRUE,
+     # nodeFilter ="none",
+     # nodeFilterPar = 20, #change the number of node
+     # nodeSize = "TSS",
+     # nodeSizeSpread = 4,
+     nodeColor = "feature", 
+     featVecCol = phyla, 
+     colorVec =  phylcol,
+     posCol = "red", 
+     negCol = "blue",
+     # edgeFilter="none" , #change the number of edge
+     # edgeFilterPar=0.2,
+     # edgeTranspLow = 0,
+     # edgeTranspHigh = 40,
+     # cexNodes = 2,
+     # cexLabels = 2,
+     # cexHubLabels = 2.5,
+     labelLength=0,
+     title1 = paste0("Network on genus level with Pearson correlations (",ggroups ,')'), 
+     showTitle = TRUE,
+     seed = 123,
+     cexTitle = 2.3
+     )
+
+
+# Colors used in the legend should be equally transparent as in the plot
+phylcol_transp <- NetCoMi:::colToTransp(phylcol, 60)
+
+legend(-1.2, 1.2, cex = 2, pt.cex = 2.5, title = "Phylum:", 
+       legend=levels(phyla), col = phylcol_transp, bty = "n", pch = 16) 
+
+legend(0.7, 1.1, cex = 2.2, title = "estimated correlation:",
+       legend = c("+","-"), lty = 1, lwd = 3, col = c("red","blue"), 
+       bty = "n", horiz = TRUE)
+
+
+  dev.off()
+```
+
+
+
+ 
+ 
+# 60-80
+```{r}
+ggroups<-"60-80"
+phyloseq_raw_n <-NULL
+phyloseq_raw_n<-subset_samples(phyloseq_raw ,group3 == ggroups )
+```
+
+# prevalence
+```{r}
+phyloseq_core_n <- core(phyloseq_raw_n, detection = 5, prevalence = 0.3)
+```
+ 
+# change name in tax
+```{r}
+colnames(phyloseq_core_n@tax_table) <- c('Rank2','Rank3','Rank4','Rank5','Rank6','Rank7','Rank1')
+
+tax.df<-phyloseq_core_n@tax_table %>%data.frame()
+tax.df$Rank2 <- paste0('P__',tax.df$Rank2)
+tax.df$Rank3 <- paste0('c__',tax.df$Rank3)
+tax.df$Rank4 <- paste0('o__',tax.df$Rank4)
+tax.df$Rank5 <- paste0('f__',tax.df$Rank5)
+tax.df$Rank6 <- paste0('g__',tax.df$Rank6)
+
+tax_table(phyloseq_core_n)<-tax.df %>% as.matrix()
+```
+ 
+
+## make a netcomi
+```{r}
+# Agglomerate to genus level
+amgut_asv <- phyloseq_core_n
+# amgut_asv <- phyloseq::tax_glom(phyloseq_core_n, taxrank = "Rank6")
+taxtab <- amgut_asv@tax_table@.Data
+
+# Find undefined taxa (in this data set, unknowns occur only up to Rank5)
+miss_f <- which(taxtab[, "Rank5"] == "f__NA")
+miss_g <- which(taxtab[, "Rank6"] == "g__NA")
+
+# Number unspecified genera
+taxtab[miss_f, "Rank5"] <- paste0("f__", 1:length(miss_f))
+taxtab[miss_g, "Rank6"] <- paste0("g__", 1:length(miss_g))
+
+# Find duplicate genera
+dupl_g <- which(duplicated(taxtab[, "Rank6"]) |
+                  duplicated(taxtab[, "Rank6"], fromLast = TRUE))
+
+for(i in seq_along(taxtab)){
+  # The next higher non-missing rank is assigned to unspecified genera
+  if(i %in% miss_f && i %in% miss_g){
+    taxtab[i, "Rank6"] <- paste0(taxtab[i, "Rank6"], "(", taxtab[i, "Rank4"], ")")
+  } else if(i %in% miss_g){
+    taxtab[i, "Rank6"] <- paste0(taxtab[i, "Rank6"], "(", taxtab[i, "Rank5"], ")")
+  }
+  
+  # Family names are added to duplicate genera
+  if(i %in% dupl_g){
+    taxtab[i, "Rank6"] <- paste0(taxtab[i, "Rank6"], "(", taxtab[i, "Rank5"], ")")
+  }
+}
+
+amgut_asv@tax_table@.Data <- taxtab
+rownames(amgut_asv@otu_table@.Data) <- taxtab[, "Rank6"]
+
+# Network construction and analysis
+net_single3 <- netConstruct(amgut_asv, 
+                            measure = "pearson",
+                            zeroMethod = "multRepl",
+                            normMethod = "TSS", 
+                            sparsMethod = "threshold", 
+                            thresh = 0.3, 
+                            seed=123,
+                            verbose = 3)
+
+```
+
+## plot 
+```{r fig.width=30,fig.height=30}
+props_single3 <- netAnalyze(net_single3, clustMethod = "cluster_fast_greedy")
+```
+
+
+```{r fig.width=30,fig.height=30}
+# Get phyla names from the taxonomic table created before
+phyla <- as.factor(gsub("p__", "", taxtab[, "Rank2"]))
+names(phyla) <- taxtab[, "Rank6"]
+
+plot(props_single3,
+     layout = "layout_with_fr",
+     repulsion = 0.6,
+     shortenLabels = "simple",
+     charToRm = "g__",
+     labelScale = FALSE,
+     nodeTransp = 10,
+     rmSingles = TRUE,
+     # nodeFilter ="none",
+     # nodeFilterPar = 20, #change the number of node
+     # nodeSize = "TSS",
+     # nodeSizeSpread = 4,
+     nodeColor = "feature", 
+     featVecCol = phyla, 
+     colorVec =  phylcol,
+     posCol = "red", 
+     negCol = "blue",
+     # edgeFilter="none" , #change the number of edge
+     # edgeFilterPar=0.2,
+     # edgeTranspLow = 0,
+     # edgeTranspHigh = 40,
+     # cexNodes = 2,
+     # cexLabels = 2,
+     # cexHubLabels = 2.5,
+     labelLength=0,
+     title1 = paste0("Network on genus level with Pearson correlations (",ggroups ,')'), 
+     showTitle = TRUE,
+     seed = 123,
+     cexTitle = 2.3
+     )
+
+# Colors used in the legend should be equally transparent as in the plot
+phylcol_transp <- NetCoMi:::colToTransp(phylcol, 60)
+
+legend(-1.2, 1.2, cex = 2, pt.cex = 2.5, title = "Phylum:", 
+       legend=levels(phyla), col = phylcol_transp, bty = "n", pch = 16) 
+
+legend(0.7, 1.1, cex = 2.2, title = "estimated correlation:",
+       legend = c("+","-"), lty = 1, lwd = 3, col = c("red","blue"), 
+       bty = "n", horiz = TRUE)
+```
+
+
+
+## save
+```{r fig.height=30, fig.width=30, include=FALSE}
+pdf(paste0("out.result/","NetCoMi_",ggroups,".pdf"), width = 30, height = 30)
+  
+
+plot(props_single3,
+     layout = "layout_with_fr",
+     repulsion = 0.6,
+     shortenLabels = "simple",
+     charToRm = "g__",
+     labelScale = FALSE,
+     nodeTransp = 10,
+     rmSingles = TRUE,
+     # nodeFilter ="none",
+     # nodeFilterPar = 20, #change the number of node
+     # nodeSize = "TSS",
+     # nodeSizeSpread = 4,
+     nodeColor = "feature", 
+     featVecCol = phyla, 
+     colorVec =  phylcol,
+     posCol = "red", 
+     negCol = "blue",
+     # edgeFilter="none" , #change the number of edge
+     # edgeFilterPar=0.2,
+     # edgeTranspLow = 0,
+     # edgeTranspHigh = 40,
+     # cexNodes = 2,
+     # cexLabels = 2,
+     # cexHubLabels = 2.5,
+     labelLength=0,
+     title1 = paste0("Network on genus level with Pearson correlations (",ggroups ,')'), 
+     showTitle = TRUE,
+     seed = 123,
+     cexTitle = 2.3
+     )
+
+# Colors used in the legend should be equally transparent as in the plot
+phylcol_transp <- NetCoMi:::colToTransp(phylcol, 60)
+
+legend(-1.2, 1.2, cex = 2, pt.cex = 2.5, title = "Phylum:", 
+       legend=levels(phyla), col = phylcol_transp, bty = "n", pch = 16) 
+
+legend(0.7, 1.1, cex = 2.2, title = "estimated correlation:",
+       legend = c("+","-"), lty = 1, lwd = 3, col = c("red","blue"), 
+       bty = "n", horiz = TRUE)
+
+  dev.off()
+```
+
+

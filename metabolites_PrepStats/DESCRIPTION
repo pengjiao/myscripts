@@ -1,0 +1,16 @@
+Package: PrepStats
+Type: Package
+Title: Make data preprocessing and statistical analysis more
+        effectivly.
+Version: 0.1.0
+Author: Wang Pengjiao
+Maintainer: The package maintainer <pengjiaow@126.com>
+Description: More about what it does (maybe more than one line)
+    Use four spaces when indenting paragraphs within the Description.
+License: What license is it under?
+Encoding: UTF-8
+Depends: R (>= 4.1.0)
+Imports: stringr (>= 1.4.0), readxl (>= 1.3.1), tidyxl (>= 1.0.8),
+        Matrix (>= 1.3.2), openxlsx (>= 4.2.5), VIM (>= 6.1.1)
+NeedsCompilation: no
+Packaged: 2022-11-02 02:23:13 UTC; pengjiao

@@ -1,0 +1,155 @@
+---
+title: "DIABLO"
+author: ""
+date: "2021/10/25"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = F, message = F)
+```
+
+## Load Library
+```{r,warning=FALSE,message=FALSE}
+library(mixOmics)
+library(dplyr)
+library(DescTools)
+library(readxl)
+library(DescTools)
+library(robCompositions)
+library(tibble)
+library(stringr)
+```
+
+## Data Import
+```{r}
+groups <- c("NC", "SCD1")
+load("../../../input/3omics_combined/SixHosp_5groups_319subjects_3omics.RData")
+
+meta_sel <- meta_info[meta_info$Group %in% groups,]
+meta_df <- meta_sel
+
+meta_df <- meta_df[order(meta_df$Group),]
+int_id <- meta_df$sample_FACS
+ck <- ck[match(int_id, rownames(ck)),]
+immune <- immune[match(int_id, rownames(immune)),]
+```
+
+## NC vs. SCD1
+
+### Transformation
+```{r}
+# ## boxcox
+
+### cytokines
+ck_bc <- log(ck+ 0.001)
+rownames(ck_bc) <- meta_df$sample_FACS
+colnames(ck_bc) <- colnames(ck)
+
+### immune
+immune_bc <- log(immune + 0.001)
+rownames(immune_bc) <- meta_df$sample_FACS
+colnames(immune_bc) <- colnames(immune)
+
+immune_bc <- as.data.frame(immune_bc)
+ck_bc <- as.data.frame(ck_bc)
+
+immune_var <- apply(immune_bc, 2, var)
+ck_var <- apply(ck_bc, 2, var)
+
+immune_top <- immune_bc
+ck_top <- ck_bc[,order(ck_var, decreasing = T)[1:60]]
+```
+
+### Parameter choice
+
+#### Design
+```{r, warning=FALSE, message=FALSE}
+data = list(cytokines = ck_top,
+            immune = immune_top)
+Y = factor(meta_df$Group,levels = groups)
+
+## design matrix
+
+design = matrix(0.1, ncol = length(data), nrow = length(data), 
+                dimnames = list(names(data), names(data)))
+diag(design) = 0
+```
+
+#### Tuning the number of components
+```{r, warning=FALSE, message=FALSE,fig.height=7,fig.width=10}
+sgccda.res = block.splsda(X = data, Y = Y, ncomp = 3, 
+                           design = design)
+
+set.seed(123) 
+perf.diablo = perf(sgccda.res, validation = 'Mfold', folds = 10, nrepeat = 10)
+plot(perf.diablo) 
+```
+
+#### Tuning keepX
+```{r, warning=FALSE, message=FALSE,fig.height=7,fig.width=10}
+set.seed(123)
+BPPARAM <- BiocParallel::MulticoreParam(workers = parallel::detectCores()-1)
+test.keepX = list(immune = c(seq(4,40,2)),
+                  cytokines = c(seq(4,40,2)))
+
+tune.TCGA = tune.block.splsda(X = data, Y = Y, ncomp = 2, 
+                              test.keepX = test.keepX, design = design,
+                              validation = 'Mfold', folds = 10, nrepeat = 10,
+                              BPPARAM = BPPARAM, dist = "max.dist")
+
+list.keepX = tune.TCGA$choice.keepX
+list.keepX
+```
+
+### Final model
+```{r, warning=FALSE, message=FALSE,fig.height=7,fig.width=10}
+sgccda.res = block.splsda(X = data, Y = Y, ncomp = 2, 
+                          keepX = list.keepX, design = design)
+```
+
+### Sample plots
+```{r, warning=FALSE, message=FALSE,fig.height=8,fig.width=11}
+plotDiablo(sgccda.res, ncomp = 1)
+plotDiablo(sgccda.res, ncomp = 2)
+plotIndiv(sgccda.res, ind.names = FALSE, legend = TRUE,title = 'DIABLO')
+```
+
+### Variable plots
+```{r,warning=FALSE,message=FALSE,fig.height=9,fig.width=11}
+plotVar(sgccda.res, var.names =T, style = 'graphics', cutoff=0.5, legend = TRUE)
+
+circosPlot(sgccda.res,  cutoff = 0.5, line = F,size.variables= 0.6, size.labels = 2.0,size.legend = 1.5)
+pdf(file = "diablo_circosPlot05.pdf", height = 9, width = 9)
+circosPlot(sgccda.res,  cutoff = 0.5, line = F,size.variables= 0.6, size.labels = 2.0,size.legend = 1.5)
+dev.off()
+
+pdf(file = "diablo_circosPlot04.pdf", height = 9, width = 9)
+circosPlot(sgccda.res,  cutoff = 0.4, line = F,size.variables= 0.6, size.labels = 2.0,size.legend = 1.5)
+dev.off()
+
+pdf(file = "diablo_circosPlot03.pdf", height = 9, width = 9)
+circosPlot(sgccda.res,  cutoff = 0.3, line = F,size.variables= 0.6, size.labels = 2.0,size.legend = 1.5)
+dev.off()
+
+
+plotLoadings(sgccda.res, comp = 1, contrib = 'max', method = 'median')
+
+plotLoadings(sgccda.res, comp = 2, contrib = 'max', method = 'median')
+
+cimDiablo(sgccda.res,legend.position = "topright",size.legend = 0.7,cluster = "column", comp=c(1),margins = c(10, 12))
+cimDiablo(sgccda.res,legend.position = "topright",size.legend = 0.7,cluster = "column", comp=c(2),margins = c(10, 12))
+pdf(file = "diablo_cimDiablot_pc1.pdf", height = 9, width = 9)
+cimDiablo(sgccda.res,legend.position = "topright",size.legend = 0.7,cluster = "column", comp=c(1),margins = c(10, 12))
+dev.off()
+pdf(file = "diablo_cimDiablot_pc2.pdf", height = 9, width = 9)
+cimDiablo(sgccda.res,legend.position = "topright",size.legend = 0.7,cluster = "column", comp=c(2),margins = c(10, 12))
+dev.off()
+
+
+pdf(file = "diablo_cimDiablot_pc1pc2.pdf", height = 9, width = 9)
+cimDiablo(sgccda.res,legend.position = "topright",size.legend = 0.7,cluster = "column", comp=c(1,2),margins = c(10, 12))
+dev.off()
+
+saveRDS(sgccda.res, file = "sgccda.res.RDS")
+```

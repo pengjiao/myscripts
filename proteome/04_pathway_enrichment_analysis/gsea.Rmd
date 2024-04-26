@@ -1,0 +1,181 @@
+---
+title: "ssGSEA"
+author: ""
+date: "2/10/2022"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Load Library
+```{r,warning=FALSE,message=FALSE}
+library(readxl)
+library(rstatix)
+library(dplyr)
+library(tibble)
+library(ggplot2)
+library(clusterProfiler)
+#library(org.Hs.eg.db)
+library(GSVA)
+library(GSEABase)
+library(limma)
+library(parallel)
+library(ComplexHeatmap)
+```
+
+```{r}
+dat <-read.csv("../01_GSEA_analysis/input/rnaseq_sixhosp_AD_GV_raw_count.csv")
+dat1 <- dat[,-grep("SCS",colnames(dat))]
+dat1 <- dat1[,-grep("Young",colnames(dat1))]
+dat1 <- column_to_rownames(dat1,"X")
+gene_id <- bitr(rownames(dat1), fromType = "SYMBOL", toType = "ENTREZID", OrgDb="org.Hs.eg.db",drop = T)
+dat2 <- dat1[match(gene_id$SYMBOL,rownames(dat1)),]
+rownames(dat2) <- gene_id$ENTREZID
+data <- as.matrix(dat2)
+group <- c("NC","SCD1","aMCI","AD1","AD_JW")
+
+met <- data.frame(cbind(colnames(dat2), c(rep("AD1",10),rep("AD_JW",10),rep("aMCI",10),rep("NC",10),rep("SCD1",10))))
+colnames(met) <- c("sample","group")
+met$group <- factor(met$group,labels=group,levels = group)
+
+mycols = c("#008a00" , "#0050ef", "#e51400")
+dirs <- "KEGG"
+gmt_kegg <- getGmt("../01_GSEA_analysis/input/c2.cp.kegg.v7.5.1.entrez.gmt")
+gmt_go <- getGmt("../01_GSEA_analysis/input/c5.go.bp.v7.5.1.entrez.gmt")
+```
+
+## ssGSEA
+```{r,warning=FALSE,message=FALSE}
+keggEs <- gsva(expr=data, gmt_kegg, method="gsva",kcdf="Poisson", min.sz=10, max.sz=100, parallel.sz=10)
+goEs <- gsva(expr=data, gmt_go, method="gsva",kcdf="Poisson", min.sz=10, max.sz=100, parallel.sz=10)
+
+
+library(limma)
+mod <- model.matrix(~ factor(met$group,levels = group))
+colnames(mod) <- c("NC", "SCD1vsNC","aMCIvsNC","AD1vsNC","AD_JWvsNC")
+fit <- lmFit(keggEs, mod)
+fit <- eBayes(fit)
+# res <- decideTests(fit, p.value=0.05)
+# summary(res)
+
+# tt <- topTable(fit, coef=2, n=Inf)
+# tt <- topTable(fit, coef="SCD1vsNC", n=Inf)
+# so you need to rank all by F statistics across all contrasts
+tt <- topTable(fit, n=Inf)
+
+
+
+DEpwys <- rownames(tt)[tt$P.Value <0.05]
+
+DEpwys_es <- keggEs[DEpwys, ]
+dats <- scale(t(DEpwys_es)) |>t()
+# dats <- apply(DEpwys_es,1,scale)
+# dats <- DEpwys_es
+# rownames(dats) <- colnames(DEpwys_es)
+
+
+
+
+pdf("kegg_pvalue_005_heatmap.pdf", width = 7,height = 2)
+Heatmap(dats,column_split = met$group,
+       #row_split = met$group,
+        cluster_columns = T, cluster_rows = T,
+        # col = col_fun, 
+        row_names_gp = gpar(fontsize = 4),
+        row_title_gp = gpar(fontsize = 4),
+        row_title_rot = 0,
+       # column_title = clust[i],
+        column_title_gp = gpar(fontsize=4),
+        column_names_gp = gpar(fontsize = 2),
+        cluster_column_slices = FALSE,
+        cluster_row_slices = F)
+dev.off()
+
+
+```
+
+
+```{r}
+library(limma)
+mod <- model.matrix(~ factor(met$group,levels = group))
+colnames(mod) <- c("NC", "SCD1vsNC","aMCIvsNC","AD1vsNC","AD_JWvsNC")
+fit <- lmFit(goEs, mod)
+fit <- eBayes(fit)
+# res <- decideTests(fit, p.value=0.05)
+# summary(res)
+
+tt <- topTable(fit, n=Inf)
+DEpwys <- rownames(tt)[tt$P.Value <0.05]
+DEpwys_es <- goEs[DEpwys, ]
+dats <- scale(t(DEpwys_es)) |>t()
+# dats <- apply(DEpwys_es,1,scale)
+# rownames(dats) <- colnames(DEpwys_es)
+
+pdf("go_pvalue_005_heatmap.pdf", width = 10,height = 15)
+Heatmap(dats,column_split = met$group,
+       #row_split = met$group,
+        cluster_columns = T, cluster_rows = T,
+        # col = col_fun, 
+        row_names_gp = gpar(fontsize = 4),
+        row_title_gp = gpar(fontsize = 4),
+        row_title_rot = 0,
+       # column_title = clust[i],
+        column_title_gp = gpar(fontsize=8),
+        column_names_gp = gpar(fontsize = 3),
+        cluster_column_slices = FALSE,
+        cluster_row_slices = F)
+dev.off()
+
+
+DEpwys <- rownames(tt)[tt$P.Value <0.01]
+DEpwys_es <- goEs[DEpwys, ]
+dats <- scale(t(DEpwys_es)) |>t()
+
+rownames(dats) <- gsub(rownames(dats),pattern = "GOBP_",replacement = "")
+
+pdf("go_pvalue_001_heatmap.pdf", width = 8,height = 10)
+Heatmap(dats,column_split = met$group,
+       #row_split = met$group,
+        cluster_columns = T, cluster_rows = T,
+        # col = col_fun, 
+        row_names_gp = gpar(fontsize = 5),
+        row_title_gp = gpar(fontsize = 4),
+        row_title_rot = 0,
+             show_heatmap_legend = FALSE,
+
+       # column_title = clust[i],
+        column_title_gp = gpar(fontsize=7),
+        column_names_gp = gpar(fontsize = 2),
+        cluster_column_slices = FALSE,
+        cluster_row_slices = F)
+dev.off()
+
+
+
+
+DEpwys <- rownames(tt)[tt$P.Value <0.001]
+DEpwys_es <- goEs[DEpwys, ]
+dats <- scale(t(DEpwys_es)) |>t()
+rownames(dats) <- gsub(rownames(dats),pattern = "GOBP_",replacement = "")
+
+pdf("go_pvalue_0001_heatmap.pdf", width = 7,height = 3)
+Heatmap(dats,column_split = met$group,
+       #row_split = met$group,
+        cluster_columns = T, cluster_rows = T,
+        # col = col_fun, 
+        row_names_gp = gpar(fontsize = 5),
+        row_title_gp = gpar(fontsize = 4),
+        row_title_rot = 0,
+      show_heatmap_legend = FALSE,
+       # column_title = clust[i],
+        column_title_gp = gpar(fontsize=7),
+        column_names_gp = gpar(fontsize = 2),
+        cluster_column_slices = FALSE,
+        cluster_row_slices = F)
+dev.off()
+
+```
+
+

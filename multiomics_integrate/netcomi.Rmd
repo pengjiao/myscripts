@@ -1,0 +1,108 @@
+---
+title: "netcomi"
+author: ""
+date: "2021/9/3"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Data Import
+```{r}
+groups <- c("NC", "SCD1")
+load("../../../input/3omics_combined/SixHosp_5groups_319subjects_3omics.RData")
+
+meta_sel <- meta_info[meta_info$Group %in% groups,]
+meta_df <- meta_sel
+
+meta_df <- meta_df[order(meta_df$Group),]
+int_id <- meta_df$sample_FACS
+ck <- ck[match(int_id, rownames(ck)),]
+metab <- metab[match(int_id, rownames(metab)),]
+immune <- immune[match(int_id, rownames(immune)),]
+
+metab <- metab[,1:69]
+
+rownames(ck) <- rownames(metab) <- rownames(immune) <- meta_df$sample_FACS
+meta_df$Group <- factor(meta_df$Group, levels = groups)
+df_all <- cbind(immune, ck, metab)
+```
+
+```{r}
+net_season <- netConstruct(data = df_all,
+                           dataType = "counts",
+                           measure = "spearman",
+                           group = meta_df$Group,
+                           filtTax = "none",
+                           filtSamp = "none",
+                           normMethod = "none", 
+                           zeroMethod = "none",
+                           sparsMethod = "threshold",
+                           thresh =  0.7,
+                           dissFunc = "signed",
+                           verbose = 3,
+                           seed = 123456)
+
+props_season <- netAnalyze(net_season,
+                           clustMethod = "cluster_fast_greedy",
+                           hubPar = "eigenvector",
+                           hubQuant = 0.95,
+                           lnormFit = FALSE,
+                           normDeg = FALSE,
+                           normBetw = FALSE,
+                           normClose = FALSE,
+                           normEigen = FALSE)
+
+
+pdf(paste0(paste0(groups, collapse = "_vs_"), "_thresh07_network.pdf"), width = 15, height = 8)
+plot(props_season ,
+     rmSingles = T,
+     labelScale = T,
+     groupNames = groups)
+dev.off()
+
+pdf(paste0(paste0(groups, collapse = "_vs_"), "_thresh07_network_samelayout.pdf"), width = 15, height = 8)
+plot(props_season ,
+     rmSingles = T,
+     labelScale = T,
+     sameLayout = T,
+     groupNames = groups)
+dev.off()
+```
+
+
+```{r}
+# Differential network construction
+diff_season <- diffnet(net_season,
+                       diffMethod = "fisherTest", 
+                       adjust = "lfdr")
+
+# Differential network plot
+pdf(paste0(paste0(groups, collapse = "_vs_"), "_thresh07_differential_network.pdf"))
+plot(diff_season, 
+     legendGroupnames = c(paste0("group ", groups[1]), paste0("group ", groups[2])))
+dev.off()
+```
+
+```{r}
+
+# Identify the differentially associated features
+diffmat_sums <- rowSums(diff_season$diffMat)
+diff_asso_names <- names(diffmat_sums[diffmat_sums > 0])
+
+pdf(paste0(paste0(groups, collapse = "_vs_"), "_thresh07_differential_network_towgroups.pdf"), width = 11)
+plot(props_season, 
+     nodeFilter = "names",
+     nodeFilterPar = diff_asso_names,
+     nodeColor = "cluster",
+     highlightHubs = FALSE,
+     sameLayout = TRUE, 
+     rmSingles = T,
+     labelScale = T,
+     groupNames = groups)
+dev.off()
+```
+
+

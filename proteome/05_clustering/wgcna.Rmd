@@ -1,0 +1,389 @@
+---
+title: "Untitled"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Load Library
+```{r,message=FALSE,warning=FALSE}
+library(WGCNA)
+library(tibble)
+library(dplyr)
+library(rstatix)
+library(corrplot)
+library(ComplexHeatmap)
+library(ggpubr)
+library(stringr)
+library(readxl)
+library(ggpubr)
+library(ggstatsplot)
+library(rstatix)
+library(propr)
+library(robCompositions)
+``` 
+
+## data
+```{r}
+load("../../../sixhosp_young_scs_aged/input/proteomics_input/SixHosp_NC_SCS1_Young_145subjects_proteomics_missing50Percent_logRatio_meta.RData")
+
+meta_df$Gender[meta_df$Gender == "female"] <- 2
+meta_df$Gender[meta_df$Gender == "male"] <- 1
+meta_df <- data.frame(meta_df)
+
+meta <- meta_df %>% 
+  select(sample_FACS, Age, Gender) %>%
+  mutate(
+    group = case_when(
+      Age > 20 & Age <= 40 ~ "20-40",
+      Age > 40 & Age <= 60 ~ "40-60",
+      Age > 60 & Age <= 80 ~ "60-80"
+    )
+  )
+
+data <- t(data.frame(df))
+rownames(meta) <- meta$sample_FACS
+groups <- c("20-40", "40-60", "60-80")
+datExpr <- df
+```
+
+
+### Construction of co-expression network
+
+```{r,message=FALSE,warning=FALSE}
+enableWGCNAThreads()
+powers <- c(1:10,seq(12,20,2))
+sft <- pickSoftThreshold(datExpr, powerVector = powers, verbose = 5,networkType = "signed")
+
+cex1 = 0.9
+# Scale-free topology fit index as a function of the soft-thresholding power
+plot(sft$fitIndices[,1], 
+     -sign(sft$fitIndices[,3])*sft$fitIndices[,2],
+     xlab="Soft Threshold (power)",
+     ylab="Scale Free Topology Model Fit,signed R^2",type="n",
+     main = paste("Scale independence"))
+text(sft$fitIndices[,1], -sign(sft$fitIndices[,3])*sft$fitIndices[,2],
+     labels=powers,cex=cex1,col="red")
+
+#Mean connectivity as a function of the soft-thresholding power
+plot(sft$fitIndices[,1], sft$fitIndices[,5],
+     xlab="Soft Threshold (power)",
+     ylab="Mean Connectivity", type="n",
+     main = paste("Mean connectivity"))
+text(sft$fitIndices[,1], sft$fitIndices[,5], labels=powers, cex=cex1,col="red")
+sft$powerEstimate
+```
+
+
+### Network construction and module detection
+
+**softPower = 6; minModuleSize = 20; hclust : average**
+
+```{r,message=FALSE,warning=FALSE,fig.width=16,fig.height=7}
+## adjacency matrix
+softPower <- 6
+adjacency <- adjacency(datExpr, power = softPower, type = "signed")
+
+## TOM matrix
+TOM = TOMsimilarity(adjacency, TOMType = "signed")
+dissTOM <- 1-TOM
+
+## Create a dendogram using a hierarchical clustering tree
+TaxaTree <- hclust(as.dist(dissTOM), method = "average")
+
+## Module identification using dynamic tree cut
+minModuleSize <- 20
+
+dynamicMods <- cutreeDynamic(dendro = TaxaTree, distM = dissTOM, 
+                             deepSplit = 2, pamRespectsDendro = FALSE,
+                             minClusterSize = minModuleSize)
+
+## Convert numeric labels into colors
+dynamicColors <- labels2colors(dynamicMods)
+
+## Plot the dendrogram with module colors underneath
+plotDendroAndColors(TaxaTree, dynamicColors, "Dynamic Tree Cut",
+                    dendroLabels = F, hang = 0.03,
+                    addGuide = T, guideHang = 0.05,
+                    main = "Dendrogram and module colors")
+
+```
+
+*softPower = 6; minModuleSize = 20; hclust :complete**
+
+```{r,message=FALSE,warning=FALSE,fig.width=16,fig.height=7}
+## adjacency matrix
+softPower <- 6
+adjacency <- adjacency(datExpr, power = softPower, type = "signed")
+
+## TOM matrix
+TOM = TOMsimilarity(adjacency, TOMType = "signed")
+dissTOM <- 1-TOM
+
+## Create a dendogram using a hierarchical clustering tree
+TaxaTree <- hclust(as.dist(dissTOM), method = "complete")
+
+## Module identification using dynamic tree cut
+minModuleSize <- 20
+
+dynamicMods <- cutreeDynamic(dendro = TaxaTree, distM = dissTOM, 
+                             deepSplit = 2, pamRespectsDendro = FALSE,
+                             minClusterSize = minModuleSize)
+
+## Convert numeric labels into colors
+dynamicColors <- labels2colors(dynamicMods)
+plotDendroAndColors(TaxaTree, dynamicColors, "Dynamic Tree Cut",
+                    dendroLabels = F, hang = 0.03,
+                    addGuide = T, guideHang = 0.05,
+                    main = "Dendrogram and module colors")
+pdf("./result/WGCNA_modules.pdf",width = 12, height = 6)
+## Plot the dendrogram with module colors underneath
+plotDendroAndColors(TaxaTree, dynamicColors, "Dynamic Tree Cut",
+                    dendroLabels = F, hang = 0.03,
+                    addGuide = T, guideHang = 0.05,
+                    main = "Dendrogram and module colors")
+dev.off()
+
+```
+
+### Find the relationships modules and clinical traits
+```{r,message=FALSE,warning=FALSE,fig.width=14,fig.height=6}
+nTaxa = ncol(datExpr)
+nSamples = nrow(datExpr)
+
+traits <- meta
+traits$group<- as.numeric(factor(traits$group, levels = groups))
+traits$Gender  <-  as.numeric(traits$Gender)
+traits <- traits[,-1]
+#traits <- apply(traits, 2, as.numeric)
+  
+moduleColors <- dynamicColors
+MEs0 <- moduleEigengenes(datExpr, moduleColors,softPower = softPower)$eigengenes
+MEs <- orderMEs(MEs0)
+
+moduleTraitCor <- cor(MEs, traits[,1:2], use = "p")
+moduleTraitPvalue <- corPvalueStudent(moduleTraitCor, nSamples)
+
+## visualize it
+textMatrix <- paste(signif(moduleTraitCor, 2), 
+                    "\n(", signif(moduleTraitPvalue, 1), ")", sep = "")
+dim(textMatrix) <- dim(moduleTraitCor)
+
+labeledHeatmap(Matrix = moduleTraitCor, 
+               xLabels = colnames(traits[1:2]), yLabels = names(MEs), 
+               ySymbols = names(MEs), colorLabels = FALSE, 
+               colors = blueWhiteRed(50), textMatrix = textMatrix, 
+               setStdMargins = T, cex.text = 1, 
+               main = paste("Module-trait relationships"))
+save(moduleTraitCor, moduleTraitPvalue, file = "result/module_trait.RData")
+```
+
+### Find the relationships modules and biomarkers （NFL，GFAP&aBETA)
+
+```{r,message=FALSE,warning=FALSE,fig.width=14,fig.height=6}
+
+# load simoa data 
+simoa <- read_excel("../../../sixhosp_aging_project/input/simoa/data_prep_v2/aging_177_samples_information_simoa.xlsx") 
+simoa1 <- simoa[,c(12,4:10)]
+simoa1<- simoa1[,-5] # remove one replicate TAU
+simoa1[,-1] <- apply(simoa1[,-1],2, as.numeric )
+colnames(simoa1)[1] <- "sample"
+simoa1$Ab42_vs_Ab40 <- simoa1$`Neuro 3-Plex A Ab42`/simoa1$`Neuro 3-Plex A Ab40`
+colnames(simoa1) <- gsub("Neuro 3-Plex A ", "", colnames(simoa1))
+colnames(simoa1) <- gsub("Neuro 4-Plex A ", "", colnames(simoa1))
+
+samples <- intersect(rownames(datExpr), simoa1$sample)
+datExpr1 <- datExpr[samples,]
+
+simoa2 <- simoa1[match(samples,simoa1$sample ),]
+simoa2 <- column_to_rownames(simoa2, var="sample")
+
+nTaxa = ncol(datExpr1)
+nSamples = nrow(datExpr1)
+moduleColors <- dynamicColors
+MEs0 <- moduleEigengenes(datExpr1, moduleColors,softPower = softPower)$eigengenes
+MEs <- orderMEs(MEs0)
+
+moduleTraitCor <- cor(MEs, simoa2, use = "p")
+moduleTraitPvalue <- corPvalueStudent(moduleTraitCor, nSamples)
+
+## visualize it
+textMatrix <- paste(signif(moduleTraitCor, 2), 
+                    "\n(", signif(moduleTraitPvalue, 1), ")", sep = "")
+dim(textMatrix) <- dim(moduleTraitCor)
+
+labeledHeatmap(Matrix = moduleTraitCor, 
+               xLabels = colnames(simoa2), yLabels = names(MEs), 
+               ySymbols = names(MEs), colorLabels = FALSE, 
+               colors = blueWhiteRed(50), textMatrix = textMatrix, 
+               setStdMargins = T, cex.text = 1, 
+               main = paste("Module-biomarkers relationships"))
+
+pdf("module-biomarkers-relationships.pdf", width = 10, height = 6)
+labeledHeatmap(Matrix = moduleTraitCor, 
+               xLabels = colnames(simoa2), yLabels = names(MEs), 
+               ySymbols = names(MEs), colorLabels = FALSE, 
+               colors = blueWhiteRed(50), textMatrix = textMatrix, 
+               setStdMargins = T, cex.text = 1, 
+               main = paste("Module-biomarkers relationships"))
+dev.off()
+
+#save(moduleTraitCor, moduleTraitPvalue, file = "result/module_trait.RData")
+```
+
+
+
+
+
+
+### boxPlot by module
+```{r, fig.height=10, fig.width=8}
+df <- cbind(meta, MEs0)
+#openxlsx::write.xlsx(df, file = "result/module_Eigenvalues.xlsx")
+
+
+ggsave(file="./result/wgcna_egigenvalue_boxplot.pdf",width = 10,height = 7)
+```
+
+
+### Output hubgenes
+```{r}
+## output connectivity
+mod_conn <- intramodularConnectivity(adjacency, moduleColors, scaleByMax = FALSE)
+mod_con <- add_column(mod_conn, protein=rownames(mod_conn),moduleColors=moduleColors,.before = colnames(mod_conn)[1])
+write.table(mod_con,file = "./result/WGCNA_connectivity.csv",sep = ",",row.names = F,quote = F)
+
+## membership
+datKME = signedKME(datExpr, MEs,outputColumnName="MM")
+kme <- datKME
+
+
+## connectivity to hub genes
+top10 <- mod_con %>% group_by(moduleColors) %>% top_n(10,kWithin)
+hub_dat <- add_column(mod_con, hub=0, .after = colnames(mod_con)[1])
+hub_dat$hub[which(hub_dat$protein %in% top10$protein)] <- 1
+
+
+cor_mat <- t(moduleTraitCor)
+corp_mat <- t(moduleTraitPvalue)
+module_rename <- data.frame(cbind(colnames(cor_mat), paste("M",1:ncol(cor_mat),sep = "")),stringsAsFactors = F)
+module_colors <- gsub("ME","",module_rename$X1)
+
+node_names <- hub_dat$moduleColors
+for (i in 1:length(module_colors)) {
+  node_names[which(hub_dat$moduleColors==module_colors[i])] <- module_rename$X2[i]
+}
+hub_out <- add_column(hub_dat, moduleNames = node_names, .after = colnames(hub_dat)[1])
+
+kme1 <- kme
+colnames(kme1) <- paste("M",1:ncol(cor_mat),sep = "")
+hub_out_file <- cbind(hub_out,kme1)
+#write.table(hub_out_file,file = "./result/WGCNA_hub_membership.csv",sep = ",",row.names = F,quote = F)
+
+
+## output cytoscape
+tom <- TOM
+colnames(tom) <- colnames(datExpr)
+rownames(tom) <- colnames(datExpr)
+cyt = exportNetworkToCytoscape(tom,
+edgeFile = paste("./result/CytoscapeInput-edges_all" ,".txt", sep=""),
+nodeFile = paste("./result/CytoscapeInput-nodes-_all", ".txt", sep=""),
+weighted = TRUE,
+threshold = 0,
+nodeNames = colnames(datExpr),
+altNodeNames = colnames(datExpr),
+nodeAttr = moduleColors)
+
+tom1 <- tom[rownames(tom) %in% top10$protein, colnames(tom) %in% top10$protein]
+cyt1 = exportNetworkToCytoscape(tom1,
+edgeFile = paste("./result/CytoscapeInput-edges_top10" ,".txt", sep=""),
+nodeFile = paste("./result/CytoscapeInput-nodes_top10", ".txt", sep=""),
+weighted = TRUE,
+threshold = 0,
+nodeNames = colnames(datExpr)[colnames(datExpr) %in% top10$protein],
+altNodeNames = colnames(datExpr)[colnames(datExpr) %in% top10$protein],
+nodeAttr = moduleColors[mod_con$moduleColors %in% top10$protein])
+
+## each module to cytoscape
+
+name_m <- hub_out_file$protein[hub_out_file$moduleNames == "M1"]
+tom_m <- tom[rownames(tom) %in% name_m, colnames(tom) %in% name_m]
+cyt_m = exportNetworkToCytoscape(tom_m,
+edgeFile = paste("./result/CytoscapeInput-edges_m1" ,".txt", sep=""),
+nodeFile = paste("./result/CytoscapeInput-nodes_m1", ".txt", sep=""),
+weighted = TRUE,
+threshold = 0,
+nodeNames = colnames(datExpr)[colnames(datExpr) %in% name_m],
+altNodeNames = colnames(datExpr)[colnames(datExpr) %in% name_m],
+nodeAttr = moduleColors[mod_con$moduleColors %in% name_m])
+
+
+name_m <- hub_out_file$protein[hub_out_file$moduleNames == "M2"]
+tom_m <- tom[rownames(tom) %in% name_m, colnames(tom) %in% name_m]
+cyt_m = exportNetworkToCytoscape(tom_m,
+edgeFile = paste("./result/CytoscapeInput-edges_m2" ,".txt", sep=""),
+nodeFile = paste("./result/CytoscapeInput-nodes_m2", ".txt", sep=""),
+weighted = TRUE,
+threshold = 0,
+nodeNames = colnames(datExpr)[colnames(datExpr) %in% name_m],
+altNodeNames = colnames(datExpr)[colnames(datExpr) %in% name_m],
+nodeAttr = moduleColors[mod_con$moduleColors %in% name_m])
+
+
+name_m <- hub_out_file$protein[hub_out_file$moduleNames == "M3"]
+tom_m <- tom[rownames(tom) %in% name_m, colnames(tom) %in% name_m]
+cyt_m = exportNetworkToCytoscape(tom_m,
+edgeFile = paste("./result/CytoscapeInput-edges_m3" ,".txt", sep=""),
+nodeFile = paste("./result/CytoscapeInput-nodes_m3", ".txt", sep=""),
+weighted = TRUE,
+threshold = 0,
+nodeNames = colnames(datExpr)[colnames(datExpr) %in% name_m],
+altNodeNames = colnames(datExpr)[colnames(datExpr) %in% name_m],
+nodeAttr = moduleColors[mod_con$moduleColors %in% name_m])
+
+
+name_m <- hub_out_file$protein[hub_out_file$moduleNames == "M4"]
+tom_m <- tom[rownames(tom) %in% name_m, colnames(tom) %in% name_m]
+cyt_m = exportNetworkToCytoscape(tom_m,
+edgeFile = paste("./result/CytoscapeInput-edges_m4" ,".txt", sep=""),
+nodeFile = paste("./result/CytoscapeInput-nodes_m4", ".txt", sep=""),
+weighted = TRUE,
+threshold = 0,
+nodeNames = colnames(datExpr)[colnames(datExpr) %in% name_m],
+altNodeNames = colnames(datExpr)[colnames(datExpr) %in% name_m],
+nodeAttr = moduleColors[mod_con$moduleColors %in% name_m])
+
+
+name_m <- hub_out_file$protein[hub_out_file$moduleNames == "M5"]
+tom_m <- tom[rownames(tom) %in% name_m, colnames(tom) %in% name_m]
+cyt_m = exportNetworkToCytoscape(tom_m,
+edgeFile = paste("./result/CytoscapeInput-edges_m5" ,".txt", sep=""),
+nodeFile = paste("./result/CytoscapeInput-nodes_m5", ".txt", sep=""),
+weighted = TRUE,
+threshold = 0,
+nodeNames = colnames(datExpr)[colnames(datExpr) %in% name_m],
+altNodeNames = colnames(datExpr)[colnames(datExpr) %in% name_m],
+nodeAttr = moduleColors[mod_con$moduleColors %in% name_m])
+
+
+
+## network
+cor_data <- cbind(datExpr,traits)
+name_1 <- colnames(datExpr)
+name_2 <- colnames(traits)
+dat_sig <- cor_test(cor_data,vars = name_1, vars2 = name_2)
+sig_mat <- as_cor_mat(dat_sig)
+datSIG <- sig_mat[,-1]
+rownames(datSIG) <- sig_mat$rowname
+sig <- datSIG
+reder_used <- list(adjacency=adjacency,tom=tom,distom=dissTOM,att_dat=hub_out_file,genesig=sig)
+saveRDS(reder_used,file="result/wgcna_to_reder.RDS")
+
+```
+
+
+
+
+

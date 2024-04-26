@@ -1,0 +1,821 @@
+---
+title: "differential analysis using DEP"
+author: "Green Valley Bioinformatics Core"
+date: "6/24/2022"
+output:
+   html_document:
+    toc: true
+    toc_float: true
+    collapsed: false
+    smooth_scroll: false
+    df_print: paged
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, fig.width=12, fig.height=8,message = F,warning = F)
+```
+
+```{r}
+library(DEP)
+library(dplyr) 
+library(RColorBrewer)
+library(SummarizedExperiment) # assay函数
+library(readxl)
+library(clusterProfiler)
+library(pathview)
+library(enrichplot)
+library(DOSE)
+library(org.Rn.eg.db)
+library(ggplot2)
+library(ComplexHeatmap)
+library(fgsea)
+#library(msigdb)
+library(enrichplot)
+```
+
+```{r}
+data <- read_excel("附件1-蛋白鉴定表.xlsx")
+# 过滤第一步
+#data <- filter(data,Reverse != "+",Potential.contaminant != "+")
+dim(data)
+data <- data[!is.na(data$`Gene names`),]
+dacpc3 <- grep("DACP-C3", colnames(data))
+data <- data[,-dacpc3]
+# 查看重复基因
+data %>% group_by(`Gene names`) %>% summarise(frequency = n()) %>%
+  arrange(desc(frequency)) %>% filter(frequency > 1)
+data_unique <- make_unique(data,"Gene names","Protein IDs",delim = ";") 
+data$names %>% duplicated() %>% any()
+LFQ_columns <- grep("LFQ.",colnames(data_unique)) # 获取LFQ Intensity所在列
+
+
+# 获取meta 
+load("~/project/16_rats_proteomics/16_rats_preprocessed_data_with_meta_20220624.RData")
+meta <- meta[-7,]
+colnames(data_unique)[LFQ_columns] <- meta$label
+
+# 构建 summarized experiment subject
+data_se <- make_se(data_unique,LFQ_columns,meta)
+dim(data_se)
+
+# plot frequency
+plot_frequency(data_se,plot=F)
+overlap <- plot_frequency(data_se,plot=F)
+DT::datatable(overlap$data)
+# plot protein number
+p <- plot_numbers(data_se)
+p + geom_text(aes(label = sprintf("%.1f", sum), y= sum),vjust = 3) +
+  scale_fill_brewer(palette = "Set1") 
+```
+
+
+# 预处理
+```{r}
+## 过滤，至少每组2样本鉴定到该蛋白
+
+#data_filter <- filter_missval(data_se,thr = 2) 
+data_filter <- filter_proteins(data_se, type = "condition", thr =2)
+#data_filter1 <- filter_proteins(data_se, type = "complete")
+
+#plot frequency 
+plot_frequency(data_filter,plot=F)
+plot_frequency(data_filter,plot=T)
+
+plot_frequency(data_filter,plot=F)
+## number of proteins
+p <- plot_numbers(data_filter)
+p + geom_text(aes(label = sprintf("%.1f", sum), y= sum),vjust = 3) +
+  scale_fill_brewer(palette = "Set1") 
+
+## protein coverage
+plot_coverage(data_filter)
+
+plot_detect(data_filter)
+
+
+# ===========数据标准化==========
+data_norm <- normalize_vsn(data_filter) # 通过方差稳定变换对数据进行背景校正和归一化
+#vsn2: 4321 x 16 matrix (1 stratum). 
+plot_normalization(data_filter,data_norm) # 所有样本标准化前后可视化箱线图
+mds_plot <- meanSdPlot(data_norm) 
+
+# ===========缺失值填充==========
+plot_missval(data_filter) # 绘图查看缺失情况
+
+
+# MNAR(非随机缺失)缺失值填充
+# option1：使用以最小值为中心的高斯分布中随机抽取来估算缺失数据
+#data_imp <- impute(data_norm,fun = "MinProb",q = 0.01)
+
+# option2：从手动定义的left-shift高斯分布随机中抽取来估算缺失数据
+# data_imp_man <- impute(data_norm,fun = "man",shift = 1.8,scale = 0.3)
+
+# option3：使用k最近邻法插补缺失值
+data_imp_knn <- impute(data_norm,fun = "knn",rowmax = 0.9)
+plot_imputation(data_norm, data_imp_knn)
+
+```
+
+# 差异分析
+```{r}
+
+data_diff <- test_diff(data_imp_knn, type = "manual", test = c("DA.P_vs_DA.C", "DACP.P_vs_DACP.C", "DACP.P_vs_DA.P"))
+dep <- add_rejections(data_diff,alpha = 0.05,lfc = 1) # 筛选差异表达蛋白质
+plot_cond(dep)
+
+results <- get_results(dep)# 生成结果表
+# p.val和p.adj列分别包含原始和调整后的P值,ratio列为平均log2FC
+# significant列表示是否按所选cutoff定义为显著/富集
+# centered列包含按protein-wise centering 的平均log2FC
+DA.P_vs_DA.C <- results[,c(1:2,3,6,9,13)]
+DACP.P_vs_DA.P <- results[,c(1:2,4,7,10,14)]
+DACP.P_vs_DACP.C <- results[,c(1:2,5,8,11,15)]
+#sig_df <- data.frame(contrast = rep(DA.P_vs_DA.C ))
+
+```
+
+# DA.P_vs_DA.C
+```{r}
+dep1 <- dep[,dep$condition %in% c("DA.P", "DA.C") ]
+plot_pca(dep1,x = 1,y = 2,n = 500,point_size = 4)
+#plot_cor(dep1,significant = TRUE,lower = 0,upper = 1,pal = "Reds")
+cor_matrix <- plot_cor(dep1,significant = TRUE,lower = 0.5,upper = 1,pal = "GnBu", plot = F)
+pheatmap(cor_matrix)
+#plot_dist(dep,significant = F,lower = -1,upper = 1,pal = "Reds")
+plot_heatmap(dep1,type = "centered",kmeans = TRUE,k = 6,col_limit = 4,
+             show_row_names = FALSE,indicate = c("condition"))
+```
+
+## volcano plot
+```{r}
+# 直接使用contrast(即直接样本比较)作为列绘制热图
+# 绘制所有重要蛋白质(行)和test contrast(列)的热图
+#plot_heatmap(dep1,type = "contrast",kmeans = TRUE,k = 6,col_limit = 10,show_row_names = FALSE)
+# 火山图(log2fc >1, padj >0.05)
+plot_volcano(dep1,contrast = "DA.P_vs_DA.C",label_size = 2,add_names = TRUE)
+```
+
+## heatmap
+```{r, fig.width = 5, fig.height=8}
+plot_heatmap(dep1, 
+             type = "centered", 
+             kmeans = F, 
+             col_limit = 4, 
+             show_row_names = T,
+             indicate = c("condition", "replicate"), 
+             clustering_distance = "spearman")
+p.heat <- plot_heatmap(dep1, 
+                       type = "contrast", 
+                       kmeans = F, 
+                       col_limit = 4, 
+                       show_row_names = T,
+                       indicate = c("condition", "replicate"), 
+                       show_row_dend= T,
+                       row_dend_side = "right", 
+                       width = 0.5, 
+                       gap = unit(1, "mm"))
+```
+
+## boxplot
+```{r,fig.width=12, fig.height=12}
+df <- DA.P_vs_DA.C
+colnames(df)[3:6] <- c("p.val", "p.adj", "sig", "log2fc") 
+sig_features <- df[df$sig ==T,]$name
+plot_single(dep1, proteins = sig_features,type="contrast")
+plot_single(dep1, proteins = sig_features,type="centered")
+#plot_volcano(dep1,contrast = "DACP.P_vs_DA.P",label_size = 2,add_names = TRUE)
+# Generate a wide data.frame
+#df_wide <- get_df_wide(dep)
+# Generate a long data.frame
+#df_long <- get_df_long(dep)
+```
+
+
+## pathway analysis  padj >0.05 & abs(logfc) > 1
+
+### kegg
+```{r,fig.width=8,fig.height=5}
+eg = bitr(sig_features, fromType="SYMBOL", toType="ENTREZID", OrgDb="org.Rn.eg.db")
+
+kegg <- enrichKEGG(eg$ENTREZID, organism = 'rno', 
+                           pvalueCutoff = 0.1)
+DT::datatable(as.data.frame(kegg))
+#DA.P_vs_DA.C_kegg <- as.data.frame(kegg)
+barplot(kegg, drop = F, showCategory = 12)
+enrichplot::cnetplot(kegg,categorySize = "pvalue", 
+                     foldChange =df[df$sig ==T,]$log2fc, colorEdge= TRUE)
+#enrichplot::emapplot(kegg)
+heatplot(kegg, foldChange=df[df$sig ==T,]$log2fc,showCategory = 10) + ggtitle("Heatplot")
+
+
+```
+
+### go BP
+```{r}
+go <- enrichGO(
+ eg$ENTREZID,
+  "org.Rn.eg.db",
+  keyType = "ENTREZID",
+  ont = "BP",
+  pvalueCutoff = 0.1,
+  pAdjustMethod = "BH",
+  #universe,
+  qvalueCutoff = 0.2,
+  #minGSSize = 10,
+  #maxGSSize = 500,
+  readable = FALSE,
+  pool = FALSE
+)
+DT::datatable(as.data.frame(go))
+barplot(go, drop = F, showCategory = 12)
+enrichplot::cnetplot(go,categorySize = "pvalue", 
+                     foldChange =df[df$sig ==T,]$log2fc, colorEdge= TRUE)
+#enrichplot::emapplot(kegg)
+heatplot(kegg, foldChange=df[df$sig ==T,]$log2fc,showCategory = 10) + ggtitle("Heatplot")
+
+
+
+```
+
+## pathway analysis padj >0.1 & abs(logfc) >1.2
+
+### kegg
+```{r,fig.width=8,fig.height=5}
+sig_features <- df[df$p.adj <0.2&abs(df$log2fc)>1.2,]$name
+d <- data_filter[rownames(data_filter) %in% sig_features]
+# dep2 <- dep1[rownames(dep) %in% sig_features,]
+# write.table(dep2@assays@data@listData,"sig_featuers_dat_padj02_logfc12.txt", col.names = F,row.names = T,quote = F)
+
+eg = bitr(sig_features, fromType="SYMBOL", toType="ENTREZID", OrgDb="org.Rn.eg.db")
+kegg <- enrichKEGG(eg$ENTREZID, organism = 'rno',
+                           pvalueCutoff = 0.1)
+DT::datatable(as.data.frame(kegg))
+barplot(kegg, drop = F, showCategory = 12)
+#enrichplot::cnetplot(kegg,categorySize = "pvalue",
+        #             foldChange =df[df$sig ==T,]$log2fc, colorEdge= TRUE)
+#enrichplot::emapplot(kegg)
+heatplot(kegg, foldChange=df[df$p.adj <0.2&abs(df$log2fc)>1.2,]$log2fc,showCategory = 10) + ggtitle("Heatplot")
+```
+
+### go BP
+```{r}
+go <- enrichGO(
+ eg$ENTREZID,
+  "org.Rn.eg.db",
+  keyType = "ENTREZID",
+  ont = "BP",
+  pvalueCutoff = 0.1,
+  pAdjustMethod = "BH",
+  #universe,
+  qvalueCutoff = 0.2,
+  #minGSSize = 10,
+  #maxGSSize = 500,
+  readable = FALSE,
+  pool = FALSE
+)
+DT::datatable(as.data.frame(go))
+barplot(go, drop = F, showCategory = 12)
+enrichplot::cnetplot(go,categorySize = "pvalue", 
+                     foldChange =df[df$p.adj <0.2&abs(df$log2fc)>1.2,]$log2fc, colorEdge= TRUE)
+#enrichplot::emapplot(kegg)
+heatplot(kegg, foldChange=df[df$p.adj <0.2&abs(df$log2fc)>1.2,]$log2fc,showCategory = 10) + ggtitle("Heatplot")
+
+
+
+```
+
+## fgsea
+```{r}
+ranks <-df[df$name %in% eg$SYMBOL,]$log2fc
+names(ranks) <-eg$ENTREZID
+ranks  <- sort(ranks,decreasing = T)
+
+# fgsea <- fgsea(pathways= kegg@geneSets,
+#                stats = ranks) 
+# plotEnrichment(  kegg@geneSets[[head(fgsea[order(pval), ], 1)$pathway]],
+#                ranks)
+# ### reactome 
+my_pathways <- reactomePathways(names(ranks))
+fgsea <- fgsea(pathways= my_pathways, stats = ranks) 
+DT:: datatable(as.data.frame(fgsea))
+#plotEnrichment(my_pathways[[head(fgsea1[order(pval), ], 1)$pathway]], ranks)
+# top_pathways <- fgsea[ES > 0][head(order(pval), n=10), pathway]
+# plotGseaTable(my_pathways[top_pathways], ranks, fgsea1, 
+#               gseaParam = 0.5)
+
+
+```
+
+
+## gesa kegg
+```{r,fig.width=10,fig.height=8}
+
+eg = bitr(df$name, fromType="SYMBOL", toType="ENTREZID", OrgDb="org.Rn.eg.db")
+colnames(df)[1] <- "SYMBOL"
+df <- merge(df,eg,"SYMBOL")
+df1 <- df[order(df$log2fc,decreasing = T),]
+ranks <- df1$log2fc
+names(ranks) <- df1$ENTREZID
+head(ranks)
+
+gse.KEGG <- gseKEGG(ranks, 
+                    organism = "rno", 
+                    pvalueCutoff = 1,
+                    pAdjustMethod = "BH") 
+DA.P_vs_DA.C_gse_kegg <- gse.KEGG@result
+DT::datatable(DA.P_vs_DA.C_gse_kegg)
+head(gse.KEGG[order(gse.KEGG@result$p.adjust,decreasing = F),],10)
+
+dotplot(gse.KEGG, showCategory = 10, title = "Enriched Pathways", split=".sign") + facet_grid(.~.sign)
+
+x2 = pairwise_termsim(gse.KEGG)
+emapplot(x2, showCategory = 20)
+ridgeplot(gse.KEGG,showCategory = 15) + labs(x = "enrichment distribution")
+#cnetplot(, categorySize="pvalue", foldChange=gene_list)
+#gseaplot(gse.KEGG, by = "all", title = gse.KEGG$Description[1], geneSetID = 1)
+```
+
+## gsea bp
+```{r,fig.width=10,fig.height=8}
+
+barplot(sort(ranks, decreasing = T))
+#fgseaRes <- fgsea(pathwaysH, ranks, minSize=15, maxSize = 500, nperm=1000)
+gse.GO <- gseGO(
+  ranks, #geneList
+  ont = "BP",  # 可选"BP"、"MF"和"CC"或"ALL"
+  OrgDb = "org.Rn.eg.db", 
+  keyType = "ENTREZID",
+  pvalueCutoff = 0.05,
+  pAdjustMethod = "BH",#p值校正方法
+)
+DA.P_vs_DA.C_gse_go <- gse.GO@result
+DT::datatable(DA.P_vs_DA.C_gse_go)
+head(gse.GO[order(gse.GO@result$p.adjust,decreasing = F),],10)
+
+dotplot(gse.GO, showCategory = 10, title = "Enriched Pathways", split=".sign") + facet_grid(.~.sign)
+
+x2 = pairwise_termsim(gse.GO)
+emapplot(x2, showCategory = 20)
+ridgeplot(gse.GO,showCategory = 15) + labs(x = "enrichment distribution")
+#cnetplot(, categorySize="pvalue", foldChange=gene_list)
+#gseaplot(gse.KEGG, by = "all", title = gse.KEGG$Description[1], geneSetID = 1)
+```
+
+
+
+
+# DACP.P_vs_DACP.C
+```{r}
+dep1 <- dep[,dep$condition %in% c("DACP.P", "DACP.C") ]
+plot_pca(dep1,x = 1,y = 2,n = 500,point_size = 4)
+cor_matrix <- plot_cor(dep1,significant = TRUE,lower = 0.5,upper = 1,pal = "GnBu", plot = F)
+pheatmap(cor_matrix)
+#plot_dist(dep,significant = F,lower = -1,upper = 1,pal = "Reds")
+plot_heatmap(dep1,type = "centered",kmeans = TRUE,k = 6,col_limit = 4,
+             show_row_names = FALSE,indicate = c("condition"))
+```
+
+## volcano plot
+```{r}
+# 直接使用contrast(即直接样本比较)作为列绘制热图
+# 绘制所有重要蛋白质(行)和test contrast(列)的热图
+#plot_heatmap(dep1,type = "contrast",kmeans = TRUE,k = 6,col_limit = 10,show_row_names = FALSE)
+# 火山图(log2fc >1, padj >0.05)
+plot_volcano(dep1,contrast = "DACP.P_vs_DACP.C",label_size = 2,add_names = TRUE)
+```
+
+## heatmap
+```{r, fig.width = 5, fig.height=8}
+plot_heatmap(dep1, 
+             type = "centered", 
+             kmeans = F, 
+             col_limit = 4, 
+             show_row_names = T,
+             indicate = c("condition", "replicate"), 
+             clustering_distance = "spearman")
+p.heat <- plot_heatmap(dep1, 
+                       type = "contrast", 
+                       kmeans = F, 
+                       col_limit = 4, 
+                       show_row_names = T,
+                       indicate = c("condition", "replicate"), 
+                       show_row_dend= T,
+                       row_dend_side = "right", 
+                       width = 0.5, 
+                       gap = unit(1, "mm"))
+```
+
+## boxplot
+```{r}
+df <- DACP.P_vs_DACP.C
+colnames(df)[3:6] <- c("p.val", "p.adj", "sig", "log2fc") 
+sig_features <- df[df$sig ==T,]$name
+if (length(sig_features) >0) {
+  plot_single(dep1, proteins = sig_features,type="contrast")
+  plot_single(dep1, proteins = sig_features,type="centered")
+}else{
+  print("no sig features")
+}
+#plot_volcano(dep1,contrast = "DACP.P_vs_DA.P",label_size = 2,add_names = TRUE)
+# Generate a wide data.frame
+#df_wide <- get_df_wi de(dep)
+# Generate a long data.frame
+#df_long <- get_df_long(dep)
+```
+
+## pathway analysis padj >0.05 & abs(logfc) > 1
+
+### kegg
+```{r,fig.width=8,fig.height=5}
+eg = bitr(sig_features, fromType="SYMBOL", toType="ENTREZID", OrgDb="org.Rn.eg.db")
+
+kegg <- enrichKEGG(eg$ENTREZID, organism = 'rno',
+                           pvalueCutoff = 0.1)
+DT::datatable(as.data.frame(kegg))
+barplot(kegg, drop = F, showCategory = 12)
+#enrichplot::cnetplot(kegg,categorySize = "pvalue",
+        #             foldChange =df[df$sig ==T,]$log2fc, colorEdge= TRUE)
+#enrichplot::emapplot(kegg)
+heatplot(kegg, foldChange=df[df$sig ==T,]$log2fc,showCategory = 10) + ggtitle("Heatplot")
+```
+
+### go BP
+```{r}
+go <- enrichGO(
+ eg$ENTREZID,
+  "org.Rn.eg.db",
+  keyType = "ENTREZID",
+  ont = "BP",
+  pvalueCutoff = 0.1,
+  pAdjustMethod = "BH",
+  #universe,
+  qvalueCutoff = 0.2,
+  #minGSSize = 10,
+  #maxGSSize = 500,
+  readable = FALSE,
+  pool = FALSE
+)
+DT::datatable(as.data.frame(go))
+barplot(go, drop = F, showCategory = 12)
+enrichplot::cnetplot(go,categorySize = "pvalue", 
+                     foldChange =df[df$sig ==T,]$log2fc, colorEdge= TRUE)
+#enrichplot::emapplot(kegg)
+heatplot(kegg, foldChange=df[df$sig ==T,]$log2fc,showCategory = 10) + ggtitle("Heatplot")
+
+
+
+```
+
+
+
+## pathway analysis padj >0.2 & abs(logfc) >1.2 
+### kegg
+```{r,fig.width=8,fig.height=5}
+
+sig_features <- df[df$p.adj <0.2&abs(df$log2fc)>1.2,]$name
+eg = bitr(sig_features, fromType="SYMBOL", toType="ENTREZID", OrgDb="org.Rn.eg.db")
+kegg <- enrichKEGG(eg$ENTREZID, organism = 'rno',
+                           pvalueCutoff = 0.1)
+DT::datatable(as.data.frame(kegg))
+barplot(kegg, drop = F, showCategory = 12)
+#enrichplot::cnetplot(kegg,categorySize = "pvalue",
+        #             foldChange =df[df$sig ==T,]$log2fc, colorEdge= TRUE)
+#enrichplot::emapplot(kegg)
+heatplot(kegg, foldChange=df[df$p.adj <0.2&abs(df$log2fc)>1.2,]$log2fc,showCategory = 10) + ggtitle("Heatplot")
+```
+
+### go BP
+```{r}
+go <- enrichGO(
+ eg$ENTREZID,
+  "org.Rn.eg.db",
+  keyType = "ENTREZID",
+  ont = "BP",
+  pvalueCutoff = 0.1,
+  pAdjustMethod = "BH",
+  #universe,
+  qvalueCutoff = 0.2,
+  #minGSSize = 10,
+  #maxGSSize = 500,
+  readable = FALSE,
+  pool = FALSE
+)
+DT::datatable(as.data.frame(go))
+barplot(go, drop = F, showCategory = 12)
+enrichplot::cnetplot(go,categorySize = "pvalue", 
+                     df[df$p.adj <0.2&abs(df$log2fc)>1.2,]$log2fc, colorEdge= TRUE)
+#enrichplot::emapplot(kegg)
+heatplot(kegg, foldChange=df[df$p.adj <0.2&abs(df$log2fc)>1.2,]$log2fc,showCategory = 10) + ggtitle("Heatplot")
+
+
+
+```
+
+## fgsea
+```{r}
+ranks <-df[df$name %in% eg$SYMBOL,]$log2fc
+names(ranks) <-eg$ENTREZID
+ranks  <- sort(ranks,decreasing = T)
+
+# fgsea <- fgsea(pathways= kegg@geneSets,
+#                stats = ranks) 
+# plotEnrichment(  kegg@geneSets[[head(fgsea[order(pval), ], 1)$pathway]],
+#                ranks)
+# ### reactome 
+my_pathways <- reactomePathways(names(ranks))
+fgsea <- fgsea(pathways= my_pathways, stats = ranks) 
+DT:: datatable(as.data.frame(fgsea))
+#plotEnrichment(my_pathways[[head(fgsea1[order(pval), ], 1)$pathway]], ranks)
+# top_pathways <- fgsea[ES > 0][head(order(pval), n=10), pathway]
+# plotGseaTable(my_pathways[top_pathways], ranks, fgsea1, 
+#               gseaParam = 0.5)
+
+
+```
+
+## gesa kegg
+```{r,fig.width=10,fig.height=8}
+
+eg = bitr(df$name, fromType="SYMBOL", toType="ENTREZID", OrgDb="org.Rn.eg.db")
+colnames(df)[1] <- "SYMBOL"
+df <- merge(df,eg,"SYMBOL")
+df1 <- df[order(df$log2fc,decreasing = T),]
+ranks <- df1$log2fc
+names(ranks) <- df1$ENTREZID
+head(ranks)
+
+gse.KEGG <- gseKEGG(ranks, 
+                    organism = "rno", 
+                    pvalueCutoff = 1,
+                    pAdjustMethod = "BH") 
+DACP.P_vs_DACP.C_gse_kegg <- gse.KEGG@result
+DT::datatable(DACP.P_vs_DACP.C_gse_kegg)
+head(gse.KEGG[order(gse.KEGG@result$p.adjust,decreasing = F),],10)
+
+dotplot(gse.KEGG, showCategory = 10, title = "Enriched Pathways", split=".sign") + facet_grid(.~.sign)
+
+x2 = pairwise_termsim(gse.KEGG)
+emapplot(x2, showCategory = 20)
+ridgeplot(gse.KEGG,showCategory = 15) + labs(x = "enrichment distribution")
+#cnetplot(, categorySize="pvalue", foldChange=gene_list)
+#gseaplot(gse.KEGG, by = "all", title = gse.KEGG$Description[1], geneSetID = 1)
+```
+
+## gsea bp
+```{r,fig.width=10,fig.height=8}
+
+barplot(sort(ranks, decreasing = T))
+#fgseaRes <- fgsea(pathwaysH, ranks, minSize=15, maxSize = 500, nperm=1000)
+gse.GO <- gseGO(
+  ranks, #geneList
+  ont = "BP",  # 可选"BP"、"MF"和"CC"或"ALL"
+  OrgDb = "org.Rn.eg.db", 
+  keyType = "ENTREZID",
+  pvalueCutoff = 0.05,
+  pAdjustMethod = "BH",#p值校正方法
+)
+DACP.P_vs_DACP.C_gse_go <- gse.GO@result
+DT::datatable(DACP.P_vs_DACP.C_gse_go)
+head(gse.GO[order(gse.GO@result$p.adjust,decreasing = F),],10)
+
+dotplot(gse.GO, showCategory = 10, title = "Enriched Pathways", split=".sign") + facet_grid(.~.sign)
+
+x2 = pairwise_termsim(gse.GO)
+emapplot(x2, showCategory = 20)
+ridgeplot(gse.GO,showCategory = 15) + labs(x = "enrichment distribution")
+#cnetplot(, categorySize="pvalue", foldChange=gene_list)
+#gseaplot(gse.KEGG, by = "all", title = gse.KEGG$Description[1], geneSetID = 1)
+```
+
+
+
+# DACP.P_vs_DA.P
+```{r}
+dep1 <- dep[,dep$condition %in% c("DACP.P", "DA.P") ]
+plot_pca(dep1,x = 1,y = 2,n = 500,point_size = 4)
+cor_matrix <- plot_cor(dep1,significant = TRUE,lower = 0.5,upper = 1,pal = "GnBu", plot = F)
+pheatmap(cor_matrix)
+#plot_dist(dep,significant = F,lower = -1,upper = 1,pal = "Reds")
+plot_heatmap(dep1,type = "centered",kmeans = TRUE,k = 6,col_limit = 4,
+             show_row_names = FALSE,indicate = c("condition"))
+```
+
+## volcano plot
+```{r}
+# 直接使用contrast(即直接样本比较)作为列绘制热图
+# 绘制所有重要蛋白质(行)和test contrast(列)的热图
+#plot_heatmap(dep1,type = "contrast",kmeans = TRUE,k = 6,col_limit = 10,show_row_names = FALSE)
+# 火山图(log2fc >1, padj >0.05)
+plot_volcano(dep1,contrast = "DACP.P_vs_DA.P",label_size = 2,add_names = TRUE)
+```
+
+## heatmap
+```{r, fig.width = 5, fig.height=8}
+plot_heatmap(dep1, 
+             type = "centered", 
+             kmeans = F, 
+             col_limit = 4, 
+             show_row_names = T,
+             indicate = c("condition", "replicate"), 
+             clustering_distance = "spearman")
+p.heat <- plot_heatmap(dep1, 
+                       type = "contrast", 
+                       kmeans = F, 
+                       col_limit = 4, 
+                       show_row_names = T,
+                       indicate = c("condition", "replicate"), 
+                       show_row_dend= T,
+                       row_dend_side = "right", 
+                       width = 0.5, 
+                       gap = unit(1, "mm"))
+```
+
+## boxplot
+```{r,fig.width=12, fig.height=12}
+df <- DACP.P_vs_DA.P
+colnames(df)[3:6] <- c("p.val", "p.adj", "sig", "log2fc") 
+sig_features <- df[df$sig ==T,]$name
+if (length(sig_features) >0) {
+  plot_single(dep1, proteins = sig_features,type="contrast")
+  plot_single(dep1, proteins = sig_features,type="centered")
+}else{
+  print("no sig features")
+}
+#plot_volcano(dep1,contrast = "DACP.P_vs_DA.P",label_size = 2,add_names = TRUE)
+# Generate a wide data.frame
+#df_wide <- get_df_wi de(dep)
+# Generate a long data.frame
+#df_long <- get_df_long(dep)
+```
+
+## pathway analysis padj >0.05 & abs(logfc) > 1
+
+### kegg
+```{r}
+eg = bitr(sig_features, fromType="SYMBOL", toType="ENTREZID", OrgDb="org.Rn.eg.db")
+
+kegg <- enrichKEGG(eg$ENTREZID, organism = 'rno', 
+                           pvalueCutoff = 0.1)
+DT::datatable(as.data.frame(kegg))
+barplot(kegg, drop = F, showCategory = 12)
+enrichplot::cnetplot(kegg,categorySize = "pvalue", 
+                     foldChange =df[df$sig ==T,]$log2fc, colorEdge= TRUE)
+#enrichplot::emapplot(kegg)
+heatplot(kegg, foldChange=df[df$sig ==T,]$log2fc,showCategory = 10) + ggtitle("Heatplot")
+
+```
+
+
+### go BP
+```{r}
+go <- enrichGO(
+ eg$ENTREZID,
+  "org.Rn.eg.db",
+  keyType = "ENTREZID",
+  ont = "BP",
+  pvalueCutoff = 0.1,
+  pAdjustMethod = "BH",
+  #universe,
+  qvalueCutoff = 0.2,
+  #minGSSize = 10,
+  #maxGSSize = 500,
+  readable = FALSE,
+  pool = FALSE
+)
+DT::datatable(as.data.frame(go))
+barplot(go, drop = F, showCategory = 12)
+enrichplot::cnetplot(go,categorySize = "pvalue", 
+                     foldChange =df[df$sig ==T,]$log2fc, colorEdge= TRUE)
+#enrichplot::emapplot(kegg)
+heatplot(kegg, foldChange=df[df$sig ==T,]$log2fc,showCategory = 10) + ggtitle("Heatplot")
+
+
+
+```
+
+
+
+
+## pathway analysis padj >0.2 & abs(logfc) > 1.2
+
+### kegg
+```{r,fig.width=8,fig.height=5}
+
+sig_features <- df[df$p.adj <0.2& abs(df$log2fc)>1.2,]$name
+eg = bitr(sig_features, fromType="SYMBOL", toType="ENTREZID", OrgDb="org.Rn.eg.db")
+kegg <- enrichKEGG(eg$ENTREZID, organism = 'rno',
+                           pvalueCutoff = 0.1)
+DT::datatable(as.data.frame(kegg))
+barplot(kegg, drop = F, showCategory = 12)
+enrichplot::cnetplot(kegg,categorySize = "pvalue",
+                     foldChange =df[df$p.adj <0.2&abs(df$log2fc)>1.2,]$log2fc, colorEdge= TRUE)
+#enrichplot::emapplot(kegg)
+heatplot(kegg, foldChange=df[df$p.adj <0.2&abs(df$log2fc)>1.2,]$log2fc,showCategory = 10) + ggtitle("Heatplot")
+```
+
+### go BP
+```{r}
+go <- enrichGO(
+ eg$ENTREZID,
+  "org.Rn.eg.db",
+  keyType = "ENTREZID",
+  ont = "BP",
+  pvalueCutoff = 0.1,
+  pAdjustMethod = "BH",
+  #universe,
+  qvalueCutoff = 0.2,
+  #minGSSize = 10,
+  #maxGSSize = 500,
+  readable = FALSE,
+  pool = FALSE
+)
+DT::datatable(as.data.frame(go))
+barplot(go, drop = F, showCategory = 12)
+# enrichplot::cnetplot(go,categorySize = "pvalue", 
+#                     df[df$p.adj <0.2&abs(df$log2fc)>1.2,]$log2fc, colorEdge= TRUE)
+#enrichplot::emapplot(kegg)
+heatplot(kegg, foldChange=df[df$p.adj <0.2&abs(df$log2fc)>1.2,]$log2fc,showCategory = 10) + ggtitle("Heatplot")
+
+
+
+```
+
+## fgsea
+```{r}
+ranks <-df[df$name %in% eg$SYMBOL,]$log2fc
+names(ranks) <-eg$ENTREZID
+ranks  <- sort(ranks,decreasing = T)
+
+# fgsea <- fgsea(pathways= kegg@geneSets,
+#                stats = ranks) 
+# plotEnrichment(  kegg@geneSets[[head(fgsea[order(pval), ], 1)$pathway]],
+#                ranks)
+# ### reactome 
+my_pathways <- reactomePathways(names(ranks))
+fgsea <- fgsea(pathways= my_pathways, stats = ranks) 
+DT:: datatable(as.data.frame(fgsea))
+#plotEnrichment(my_pathways[[head(fgsea1[order(pval), ], 1)$pathway]], ranks)
+# top_pathways <- fgsea[ES > 0][head(order(pval), n=10), pathway]
+# plotGseaTable(my_pathways[top_pathways], ranks, fgsea1, 
+#               gseaParam = 0.5)
+
+
+```
+
+## gsea kegg
+```{r,fig.width=10,fig.height=8}
+
+eg = bitr(df$name, fromType="SYMBOL", toType="ENTREZID", OrgDb="org.Rn.eg.db")
+colnames(df)[1] <- "SYMBOL"
+df <- merge(df,eg,"SYMBOL")
+df1 <- df[order(df$log2fc,decreasing = T),]
+ranks <- df1$log2fc
+names(ranks) <- df1$ENTREZID
+head(ranks)
+
+gse.KEGG <- gseKEGG(ranks, 
+                    organism = "rno", 
+                    pvalueCutoff = 1,
+                    pAdjustMethod = "BH") 
+DACP.P_vs_DA.P_gse_kegg <- gse.KEGG@result
+DT:: datatable(DACP.P_vs_DA.P_gse_kegg)
+head(gse.KEGG[order(gse.KEGG@result$p.adjust,decreasing = F),],10)
+
+dotplot(gse.KEGG, showCategory = 10, title = "Enriched Pathways", split=".sign") + facet_grid(.~.sign)
+
+x2 = pairwise_termsim(gse.KEGG)
+emapplot(x2, showCategory = 20)
+ridgeplot(gse.KEGG,showCategory = 15) + labs(x = "enrichment distribution")
+#cnetplot(, categorySize="pvalue", foldChange=gene_list)
+#gseaplot(gse.KEGG, by = "all", title = gse.KEGG$Description[1], geneSetID = 1)
+```
+
+## gsea bp
+```{r,fig.width=10,fig.height=8}
+
+barplot(sort(ranks, decreasing = T))
+#fgseaRes <- fgsea(pathwaysH, ranks, minSize=15, maxSize = 500, nperm=1000)
+gse.GO <- gseGO(
+  ranks, #geneList
+  ont = "BP",  # 可选"BP"、"MF"和"CC"或"ALL"
+  OrgDb = "org.Rn.eg.db", 
+  keyType = "ENTREZID",
+  pvalueCutoff = 0.05,
+  pAdjustMethod = "BH",#p值校正方法
+)
+DACP.P_vs_DA.P_gse_go <- gse.GO@result
+DT:: datatable(DACP.P_vs_DA.P_gse_go)
+head(gse.GO[order(gse.GO@result$p.adjust,decreasing = F),],10)
+
+dotplot(gse.GO, showCategory = 10, title = "Enriched Pathways", split=".sign") + facet_grid(.~.sign)
+
+x2 = pairwise_termsim(gse.GO)
+emapplot(x2, showCategory = 20)
+ridgeplot(gse.GO,showCategory = 15) + labs(x = "enrichment distribution")
+#cnetplot(, categorySize="pvalue", foldChange=gene_list)
+#gseaplot(gse.KEGG, by = "all", title = gse.KEGG$Description[1], geneSetID = 1)
+```
+
+```{r}
+save(data_se,data_filter,data_norm,data_imp_knn,results,DACP.P_vs_DA.P_gse_kegg,DACP.P_vs_DA.P_gse_go,DACP.P_vs_DACP.C_gse_kegg,DACP.P_vs_DACP.C_gse_go,DA.P_vs_DA.C_gse_kegg,DA.P_vs_DA.C_gse_go, file = "16_rats_differential_analysis.RData")
+```

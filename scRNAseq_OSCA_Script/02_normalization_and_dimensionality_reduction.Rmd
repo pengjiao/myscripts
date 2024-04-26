@@ -1,0 +1,345 @@
+---
+title: "02_Normalization_DimensionalityReduction_Clustering"
+author: ""
+date: "2022/10/18"
+output: 
+  html_document: 
+    toc: yes
+    toc_depth: 5
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE)
+```
+
+We then apply the standard workflow to each sample separately:
+
+normalisation
+variance modelling
+dimensionality reduction
+clustering
+
+## Load library
+```{r}
+library(SingleCellExperiment)
+library(scuttle)
+library(scater)
+library(BiocParallel)
+library(scran)
+library(batchelor)
+library(bluster)
+library(cowplot)
+```
+
+## Normalization
+
+The normalized values are used for visulization, clustering and dimensionality reduction.
+
+```{r}
+# Parameters
+this.path <- "../Results/02_normalization_and_dimensionality_reduction_clustering"
+bp.params <- MulticoreParam(workers = 20)
+set.seed(1234)
+dir.create(this.path)
+
+# Import sce object after quality control
+sce <- readRDS("../Results/01_preprocess_and_quality_control/SCE_filtered_cellQC_3MAD_featureQC_above20cells.RDS")
+
+# Split sce by column data into list
+sample.sce <- levels(factor(colData(sce)$Sample))
+all.sce <- lapply(sample.sce, function(x) sce[, colData(sce)$Sample == x])
+names(all.sce) <- sample.sce
+
+#--- normalization ---#
+# logcounts: log-transformed normalized expression values
+all.sce <- lapply(all.sce, logNormCounts)
+
+#--- variance-modelling ---#
+# model variance with modelGeneVar()
+# find top 2000 highly variable genes (HVGs) with getTopHVGs()
+all.dec <- lapply(all.sce, modelGeneVar)
+all.hvgs <- lapply(all.dec, getTopHVGs, n=2000)
+```
+
+## Dimensionality reduction
+```{r}
+#--- dimensionality-reduction ---#
+# use runPCA()
+# then compute embeddings with runTSNE() and runUMAP()
+all.sce <- mapply(FUN=runPCA,
+          x=all.sce,
+          subset_row=all.hvgs,
+          MoreArgs=list(ncomponents=30,
+                BSPARAM=RandomParam()),
+          SIMPLIFY=FALSE)
+
+all.sce <- lapply(all.sce, runTSNE, dimred="PCA")
+all.sce <- lapply(all.sce, runUMAP, dimred="PCA")
+
+#--- clustering ---#
+# cluster each sample separately
+for (n in names(all.sce)) {
+    g <- buildSNNGraph(all.sce[[n]], k=10, use.dimred='PCA')
+    clust <- igraph::cluster_walktrap(g)$membership
+    all.sce[[n]]$label  <- factor(clust)
+}
+# saveRDS(all.sce, file = paste0(this.path, "/SCE_list_PCA_TSNE_UMAP_clustering.RDS"))
+# all.sce <- readRDS(paste0(this.path, "/SCE_list_PCA_TSNE_UMAP_clustering.RDS"))
+```
+
+### Data prepared for batch effect correlation
+To prepare for the batch correction:
+We subset all all the samples to the common “universe” of features (Ensembl gene annotation). 
+
+Then we rescale each batch to adjust for differences in sequencing depth between batches. The multiBatchNorm() function recomputes log-normalized expression values after adjusting the size factors for systematic differences in coverage between SingleCellExperiment (SCE) objects. (Size factors only remove biases between cells within a single batch.) This improves the quality of the correction by removing one aspect of the technical differences between batches.
+```{r}
+# Subset all of the samples to the common Ensembl gene annotation
+allNames <- unlist(lapply(all.sce, function(x){rownames(x)}))
+allNamesNb <- table(allNames)
+universe <- names(allNamesNb)[allNamesNb==length(all.sce)]
+
+# Subsetting the SingleCellExperiment object.
+uni.sce <- lapply(all.sce, function(x){x[universe,]})
+# Also subsetting the variance modelling results, for convenience.
+uni.dec <- lapply(all.dec, function(x){x[universe,]})
+
+# Rescale each sample to adjust for differences in sequencing depth between samples
+rescaled <- multiBatchNorm(uni.sce, batch = "Sample")
+
+# Compute average variance components across samples
+combined.dec <- combineVar(uni.dec)
+
+# Identify highly variables genes
+# Here union of hvgs selected by each sample and top 5000 hgvs were selected
+all.hvgs.union <- Reduce(union, all.hvgs)
+chosen.hvgs <- rownames(combined.dec) %in% union(getTopHVGs(combined.dec, n = 5000), all.hvgs.union)
+table(chosen.hvgs)
+combined.dec$chosenHvg <- chosen.hvgs
+```
+
+When integrating datasets of variable composition, it is generally safer to err on the side of including more genes than are used in a single dataset analysis, to ensure that markers are retained for any dataset-specific subpopulations that might be present. For a top X selection, this means using a larger X (say, ~5000), or in this case, we simply take all genes above the trend.
+Alternatively, a more forceful approach to feature selection can be used based on marker genes from within-batch comparisons.
+
+## Diagnosing batch effects
+```{r}
+# Reminder: the metadata must be the same for each sample for cbind()ing.
+# concat matrices:
+uncorrected <- do.call(cbind, rescaled)
+
+# copy choice to uncorrected SCE:
+all(rownames(combined.dec) == rownames(uncorrected))
+
+rowData(uncorrected) <- cbind(rowData(uncorrected), combined.dec)
+
+# saveRDS(uncorrected, paste0(this.path, "/DataIntegration_uncorrected.RDS"))
+
+# Perform PCA TSNE and UMAP
+# Using RandomParam() as it is more efficient for file-backed matrices.
+set.seed(1234)
+uncorrected <- runPCA(uncorrected,
+                      subset_row=chosen.hvgs,
+                      BSPARAM=BiocSingular::RandomParam())
+uncorrected <- runTSNE(uncorrected, dimred = "PCA")
+# uncorrected <- runUMAP(uncorrected, dimred = "PCA")
+
+# saveRDS(uncorrected, paste0(this.path, "/DataIntegration_uncorrected_PCA_TSNE.RDS"))
+```
+
+### Clustering
+We use graph-based clustering on the components to obtain a summary of the population structure. 
+
+As the samples should be replicates, each cluster should ideally consist of cells from each batch. However, we instead see clusters that are comprised of cells from a single batch. This indicates that cells of the same type are artificially separated due to technical differences between batches.
+
+```{r}
+# uncorrected <- readRDS(paste0(this.path, "/DataIntegration_uncorrected_PCA_TSNE.RDS"))
+
+mat.uncorrected <- reducedDim(uncorrected, "PCA")
+
+two.out.uncorrected <- clusterRows(mat.uncorrected, TwoStepParam(
+  first = KmeansParam(centers=100),
+  second = NNGraphParam(k=2, cluster.fun = "walktrap")),
+  full = TRUE)
+uncorrected$cluster_twostep <- two.out.uncorrected$clusters
+
+# Get number of cells for each {cluster, batch} pair
+clusterTab <- data.frame("clusters" = two.out.uncorrected$clusters, 
+                         "batch" = uncorrected$Sample,
+                         "group" = uncorrected$cluster)
+ClusterInfo <- clusterTab %>% 
+  group_by(clusters, batch) %>%
+  summarise(cells = n())
+
+ClusterInfo.1 <- clusterTab %>% 
+  group_by(clusters, group) %>%
+  summarise(cells = n())
+
+p1 <- ggplot(data=ClusterInfo, aes(x=clusters,y=cells, fill=batch)) +
+    geom_col() +
+    theme(axis.text.x=element_text(angle = 90, hjust = 0)) +
+  ggtitle("uncorrected, cell numbers") +
+  theme(legend.text = element_text(size = 7))
+p2 <- ggplot(data=clusterTab, aes(x=clusters, fill = batch)) +
+  geom_bar(position = "fill") +
+  scale_y_continuous(labels = scales::percent) +
+    theme(axis.text.x=element_text(angle = 90, hjust = 0)) +
+  ggtitle("uncorrected, proportions") +
+  theme(legend.text = element_text(size = 7))
+plot_grid(p1, p2, ncol=1)
+ggsave(paste0(this.path, "/DataIntegration_uncorrected_batcheffect_barplot.pdf"), width = 9, height = 9)
+
+p1 <- ggplot(data=ClusterInfo.1, aes(x=clusters,y=cells, fill=group)) +
+    geom_col() +
+    theme(axis.text.x=element_text(angle = 90, hjust = 0)) +
+  ggtitle("uncorrected, cell numbers") +
+  theme(legend.text = element_text(size = 7))
+p2 <- ggplot(data=clusterTab, aes(x=clusters, fill = group)) +
+  geom_bar(position = "fill") +
+  scale_y_continuous(labels = scales::percent) +
+    theme(axis.text.x=element_text(angle = 90, hjust = 0)) +
+  ggtitle("uncorrected, proportions") +
+  theme(legend.text = element_text(size = 7))
+plot_grid(p1, p2, ncol=1)
+ggsave(paste0(this.path, "/DataIntegration_uncorrected_batcheffect_barplot_group.pdf"), width = 9, height = 9)
+
+
+# Visualize the uncorrected coordinates using a t-SNE plot
+plotTSNE(uncorrected,
+          colour_by = "Sample") + 
+ facet_wrap(~uncorrected$cluster)
+ggsave(paste0(this.path, "/DataIntegration_uncorrected_batcheffect_TSNE_groups.pdf"), width = 14, height = 6)
+
+plotTSNE(uncorrected,
+          colour_by = "cluster_twostep") + 
+ facet_wrap(~uncorrected$cluster)
+ggsave(paste0(this.path, "/DataIntegration_uncorrected_batcheffect_TSNE_clusters.pdf"), width = 14, height = 6)
+```
+
+## Mutual Nearest Neighbour correction
+```{r}
+set.seed(1234)
+mnn.out <- fastMNN(rescaled,
+                   auto.merge = TRUE,
+                   d = 50,
+                   k = 20,
+                   subset.row = chosen.hvgs,
+                   BPPARAM = bp.params)
+# saveRDS(mnn.out, file = paste0(this.path, "/DataIntegration_MNN_out.RDS"))
+```
+
+```{r}
+# mnn.out <- readRDS(paste0(this.path, "/DataIntegration_MNN_out.RDS"))
+mnn.out.corre.dim <- dim(reducedDim(mnn.out, "corrected"))
+mnn.out.recon.dim <- dim(assay(mnn.out, "reconstructed"))
+
+# add feature selection outcome to mmn.out
+# used in other analyses later.
+columnsToGet <- setdiff(colnames(combined.dec), "per.block")
+combined.dec.df <- combined.dec[,columnsToGet] %>%
+  data.frame() %>%
+  tibble::rownames_to_column("ID") %>%
+  filter(ID %in% rownames(rowData(mnn.out)))
+rotationMat <- rowData(mnn.out)$rotation
+rowData(mnn.out)$ID <- rownames(rowData(mnn.out))
+rowData(mnn.out)$rotation <- NULL
+
+rowData(mnn.out) <- rowData(mnn.out) %>%
+  data.frame() %>%
+  left_join(combined.dec.df, by="ID") %>%
+  DataFrame()
+
+# add rotation back
+rowData(mnn.out)$rotation <- rotationMat
+
+# also have gene symbol:
+# copied from 'uncorrected'
+rowData(mnn.out)$Symbol <- rowData(uncorrected)[rowData(mnn.out)$ID,]$Symbol
+
+# add cell information onto mnn.out
+all(rownames(colData(mnn.out)) == rownames(colData(uncorrected)))
+colData(mnn.out) <- cbind(colData(mnn.out), colData(uncorrected))
+
+# tidy
+rm(columnsToGet, rotationMat)
+
+# saveRDS(mnn.out, file = paste0(this.path, "/DataIntegration_MNN_out_featuresinfo.RDS"))
+```
+
+### Clustering
+```{r}
+mat.mnn <- reducedDim(mnn.out, "corrected")
+
+two.out.mnn <- clusterRows(mat.mnn, TwoStepParam(
+  first = KmeansParam(centers=100),
+  second = NNGraphParam(k=2, cluster.fun = "walktrap")),
+  full = TRUE)
+mnn.out$cluster_twostep <- two.out.mnn$clusters
+
+
+# snn.gr <- buildSNNGraph(mnn.out, use.dimred="corrected", k=20)
+# clusters.mnn <- igraph::cluster_walktrap(snn.gr)$membership
+# colLabels(mnn.out) <- factor(clusters.mnn)
+clusterTab.mnn <- data.frame(clusters=mnn.out$cluster_twostep, batch=mnn.out$Sample, group=mnn.out$cluster)
+
+# Get number of cells for each {cluster, batch} pair
+ClusterInfo.mnn <- clusterTab.mnn %>% 
+  group_by(clusters, batch) %>%
+  summarise(cells = n())
+
+ClusterInfo.mnn.1 <- clusterTab.mnn %>% 
+  group_by(clusters, group) %>%
+  summarise(cells = n())
+
+
+mp1 <- ggplot(data=ClusterInfo.mnn, aes(x=clusters,y=cells, fill=batch)) +
+    theme(axis.text.x=element_text(angle = 90, hjust = 0)) +
+    geom_col() +
+    theme(legend.text = element_text(size = 7))
+mp2 <- ggplot(data=clusterTab.mnn, aes(x=clusters, fill=batch)) +
+  geom_bar(position = "fill") +
+    theme(axis.text.x=element_text(angle = 90, hjust = 0)) +
+  scale_y_continuous(labels = scales::percent) +
+  theme(legend.text = element_text(size = 7))
+
+plot_grid(mp1, mp2, ncol=1)
+ggsave(paste0(this.path, "/DataIntegration_correctedByMNN_batcheffect_barplot_sample.pdf"), width = 9, height = 9)
+
+
+mp1.s <- ggplot(data=ClusterInfo.mnn.1, aes(x=clusters,y=cells, fill=group)) +
+    theme(axis.text.x=element_text(angle = 90, hjust = 0)) +
+    geom_col()
+mp2.s <- ggplot(data=clusterTab.mnn, aes(x=clusters, fill=group)) +
+  geom_bar(position = "fill") +
+    theme(axis.text.x=element_text(angle = 90, hjust = 0)) +
+  scale_y_continuous(labels = scales::percent)
+
+plot_grid(mp1.s, mp2.s, ncol=1)
+ggsave(paste0(this.path, "/DataIntegration_correctedByMNN_batcheffect_barplot_group.pdf"), width = 9, height = 9)
+
+# dimensinality reduction
+set.seed(1234)
+mnn.out <- runTSNE(mnn.out, dimred="corrected", BPPARAM = bp.params)
+mnn.out <- runUMAP(mnn.out, dimred="corrected", BPPARAM = bp.params)
+# saveRDS(mnn.out, file = paste0(this.path, "/DataIntegration_MNN_out_clustering_dimensionreduction.RDS"))
+
+# Visualize the uncorrected coordinates using a t-SNE plot
+plotTSNE(mnn.out,
+          colour_by = "Sample") + 
+ facet_wrap(~mnn.out$cluster)
+ggsave(paste0(this.path, "/DataIntegration_correctedByMNN_batcheffect_TSNE_groups.pdf"), width = 14, height = 6)
+
+plotTSNE(mnn.out,
+          colour_by = "cluster_twostep") + 
+ facet_wrap(~mnn.out$cluster)
+ggsave(paste0(this.path, "/DataIntegration_correctedByMNN_batcheffect_TSNE_clusters.pdf"), width = 14, height = 6)
+
+plotTSNE(mnn.out,
+          colour_by = "cluster_twostep") + 
+ facet_wrap(~mnn.out$Sample)
+ggsave(paste0(this.path, "/DataIntegration_correctedByMNN_batcheffect_TSNE_samples.pdf"), width = 24, height = 22)
+```
+
+
+## Report system and packages
+```{r}
+report(sessionInfo())
+```

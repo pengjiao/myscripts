@@ -1,0 +1,41 @@
+---
+title: "linear_regression"
+author: ""
+date: "2021/11/1"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## library
+```{r}
+library(parameters)
+```
+
+## data
+```{r}
+load("../../../../sixhosp_young_scs_aged/input/proteomics_input/SixHosp_NC_SCS1_Young_145subjects_proteomics_missing50Percent_logRatio_meta.RData")
+
+meta_df$Gender[meta_df$Gender == "female"] <- 2
+meta_df$Gender[meta_df$Gender == "male"] <- 1
+meta_df <- data.frame(meta_df)
+
+data <- cbind(meta_df[,c("Age", "Gender")], df)
+```
+
+## linear regression
+```{r}
+lm_list <- list()
+for (i in colnames(df)) {
+  lm_list[[i]] <- lm(paste0(i, "~ Age + Gender"), data = data)
+}
+lm_fit <- lapply(lm_list, parameters)
+lm_dat <- do.call(rbind,lm_fit)
+lm_df <- lm_dat[lm_dat$Parameter == "Age",]
+lm_df$fdr <- p.adjust(lm_df$p, method = "fdr")
+lm_df <- add_column(lm_df, features = colnames(df), .before = 1)
+openxlsx::write.xlsx(lm_df, file = "linear_regression_age_table.xlsx")
+```
+

@@ -1,0 +1,278 @@
+---
+title: "Untitled"
+author: ""
+date: "2021/9/1"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+library(proBatch)
+library(knitr)
+library(lubridate)
+library(stringr)
+require(dplyr)
+require(tibble)
+require(ggplot2)
+library(readxl)
+library(stringr)
+library(PCAtools)
+library(xlsx)
+library(ggpubr)
+library(tidyr)
+library(sva)
+```
+
+# load data and meta info
+```{r}
+dat <- read.csv("../input/328_samples_proteomics.csv")
+info <- read_excel("../probatch/input/proteomics_2batchs_files_info (1).xlsx") %>% data.frame()
+info$sample <- make.unique(info$sample,sep="-after")
+info$sample <- gsub("after1", "after", info$sample)
+rownames(info) <- info$sample
+
+dat$X <- gsub("_","-", dat$X)
+id <- match(info$sample, dat$X)
+dat1 <- dat[id,]
+dat2 <- t(dat1[,-1])
+colnames(dat2) <- dat1$X
+ 
+```
+
+# quantile normalization
+```{r}
+dat3 = normalize_data_dm(dat2,normalize_func = 'quantile')
+```
+
+
+
+
+# pca 328samples
+```{r}
+library(ggplot2)
+dat3 <- as.data.frame(dat3)
+info$batch <- as.character(info$batch)
+p <- PCAtools::pca(dat3, info, scale = T)
+pdf("pca_328_samples_without_correction.pdf", width = 9, height = 6)
+biplot(p,
+       lab = '',
+       colby = 'batch',
+       title = 'quantile',
+       hline = 0, vline = 0,
+       legendPosition = 'right')+
+     scale_colour_manual(values = c("royalblue","red2"))
+dev.off()
+```
+
+# combat corection
+```{r}
+combat_edata = ComBat(dat=dat3, batch=info$batch, mod=NULL, par.prior=TRUE, prior.plots=FALSE)
+combat_edata <- as.data.frame(combat_edata)
+```
+
+# write excel
+```{r}
+df <- data.frame(t(combat_edata))
+write.xlsx(df,"proteomics_328_samples_combat_correction.xlsx")
+
+```
+
+
+# pca after correction
+```{r}
+p <- PCAtools::pca(combat_edata, info, scale = T)
+pdf("pca_328_samples_after_correction.pdf", width = 9, height = 6)
+biplot(p,
+       lab = '',
+       colby = 'batch',
+       title = 'quantile',
+       hline = 0, vline = 0,
+       legendPosition = 'right')+
+     scale_colour_manual(values = c("royalblue","red2"))
+dev.off()
+```
+
+
+# boxplot after correction
+```{r}
+#attach(info)
+#df1 <- cbind(order,batch, df)
+#detach(info)
+batch1_sample <- info %>%
+        filter(batch==1)
+batch1_sample <- batch1_sample$sample
+
+
+df1 <- gather(combat_edata,key="sample", value = "intensity",1:328)
+df1$batch <- NA
+df1$batch <- ifelse(df1$sample %in% batch1_sample,1,2)
+df1$batch <- as.factor(df1$batch)
+
+pdf("boxplot_328_samples_after_correction.pdf", width = 9, height = 6)
+ggboxplot(df1, x = "sample", y = "intensity",color="batch",width = 0.3)
+dev.off()
+
+```
+
+# continuous drift correction
+```{r}
+
+info$FullRunName <- info$sample
+
+info <- info[,c(9,1:8)]
+info$MS_batch <- info$batch
+info <- info[,c(1,10,2:9)]
+info$MS_batch <- as.factor(info$MS_batch)
+
+
+dat3 <- as.data.frame(dat3)
+dat4 <- gather(dat3,key="FullRunName", value = "intensity", 1:328)
+dat4$feature <-NA
+feature <- rep(rownames(dat3),328)
+dat4$feature <- feature
+dat4 <-dat4[,c(3,1,2)]
+colnames(dat4) <- c("peptide_group_label", "FullRunName", "Intensity")
+fit <- adjust_batch_trend_df(dat4,info,no_fit_imputed = F,span=0.3)
+cols =c(data,fit)
+
+
+batch1_sample <- info %>%
+        filter(batch==1)
+batch1_sample <- batch1_sample$sample
+fit$batch <- NA
+fit$batch <- ifelse(fit$FullRunName %in% batch1_sample,1,2)
+fit$batch <- as.factor(fit$batch)
+
+
+```
+
+# plot 
+```{r}
+pdf("9_features_after_drrit_correction.pdf", width = 9, height = 6)
+par(mfrow=c(3,3))
+plot_with_fitting_curve(dat4$peptide_group_label[1:9],
+fit_df = fit, fit_value_col = 'fit',
+df_long = dat4,
+sample_annotation = info,
+color_by_batch = TRUE,
+plot_title = 'Span = 30%')
+dev.off()
+```
+
+
+# pca after drift
+```{r}
+
+fit1 <- fit[,c(2,5,1)]
+fit1 <- data.frame(fit1)
+fit1$fit <- as.numeric(fit1$fit)
+fit2 <- fit1 %>% spread(FullRunName, fit)
+rownames(fit2) <-fit2$peptide_group_label
+fit2 <- fit2[,-1]
+id <- match(info$FullRunName,colnames(fit2))
+fit3 <- fit2[,id] 
+info$batch <- as.character(info$batch)
+p <- PCAtools::pca(fit3, info, scale = T)
+pdf("pca_328_samples_after_drift.pdf", width = 9, height = 6)
+biplot(p,
+       lab = '',
+       colby = 'batch',
+       title = '',
+       hline = 0, vline = 0,
+       legendPosition = 'right')+
+     scale_colour_manual(values = c("royalblue","red2"))
+dev.off()
+```
+
+
+
+```{r}
+
+#batch_col = 'MS_batch'
+#dat4$FullRunName <- factor(dat4$FullRunName,levels =info$FullRunName)
+#pdf("boxplot_328_samples_quantile_no_correction.pdf", width = 9, height = 6)
+#plot_boxplot(dat4, info,batch_col = batch_col)
+#dev.off()
+```
+
+
+
+
+
+
+# boxplot after quantile normalization using probatch package
+```{r}
+
+batch_col = 'MS_batch'
+dat4$FullRunName <- factor(dat4$FullRunName,levels =info$FullRunName)
+pdf("boxplot_328_samples_quantile_no_correction1.pdf", width = 24, height = 5)
+plot_boxplot(dat4, info,batch_col = batch_col)
+dev.off()
+
+
+#dfx <- dat4
+#dfx$FullRunName <- as.character(dfx$FullRunName)
+#df_merx <- merge(info, dfx, by = "FullRunName")
+#pdf("boxplot_328_samples_quantile_no_correction_test.pdf", width = 19, height = 3)
+#ggboxplot(df_merx, x = "order", y = "Intensity",color="batch")
+#dev.off()
+```
+
+
+
+```{r}
+#batch1_sample <- info %>%
+     #   filter(batch==1)
+#batch1_sample <- batch1_sample$sample
+
+
+#df_quantile <- gather(dat3,key="sample", value = "intensity",1:328)
+#df_quantile$batch <- NA
+#df_quantile$batch <- ifelse(df_quantile$sample %in% batch1_sample,1,2)
+#df_quantile$batch <- factor(df_quantile$batch,levels=info$FullRunName)
+
+#pdf("boxplot_328_samples_after_correction.pdf", width = 9, height = 6)
+#ggboxplot(df1, x = "sample", y = "intensity",color="batch",width = 0.3)
+#dev.off()
+```
+
+
+# boxplot after drift 
+
+```{r}
+
+#fit1$batch <- NA
+#fit1$batch <- ifelse(fit1$FullRunName %in% batch1_sample,1,2)
+#fit1$batch <- as.factor(df_quantile$batch)
+#fit1$FullRunName <- factor(fit1$FullRunName,levels = info$FullRunName,ordered =T)
+#pdf("boxplot_328_samples_after_drift.pdf", width = 9, height = 6)
+#ggboxplot(fit1, x = "FullRunName", y = "fit",color="batch",width = 0.3)
+#dev.off()
+```
+
+```{r}
+fit1$Intensity <- fit1$fit
+
+pdf("boxplot_328_samples_after_drift_probatch.pdf", width = 24, height = 5)
+plot_boxplot(fit1, info,batch_col = batch_col)
+dev.off()
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+        

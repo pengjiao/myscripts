@@ -1,0 +1,303 @@
+---
+title: "01_QC_WTA_Seurat_Combined"
+author: ""
+date: "2023-12-28"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Load library
+```{r}
+library(dplyr)
+library(Seurat)
+library(patchwork)
+library(org.Mm.eg.db)
+library(biomaRt)
+library(celldex)
+library(SingleR)
+library(scater)
+library(dittoSeq)
+library(scater)
+library(patchwork)
+library(cowplot)
+library(viridis)
+library(HGNChelper)
+library(DoubletFinder)
+library(ggExtra)
+library(ggpubr)
+```
+
+## Data
+```{r}
+meta.info <- data.frame(SampleID=c("ConPB", "G73", "Ag2302", "B2302", "p2302"),
+                        SampleType=c("PanB", "PanB", "Agpos", "PanB", "PlasmaB"),
+                        SampleSource=c("Control", "DNAImmune", "PrImmune", "PrImmune", "PrImmune"),
+                        SampleGroup=c("ControlPanB", "DNAPanB", "PrAgPos", "PrPanB", "PrPlasmaB"))
+data_dir <- "/media/jmbiologics/sdd8T/scRNAseq_results"
+sample_dir <- list.dirs(data_dir, full.names = T, recursive = F)
+```
+
+
+### Quality Data
+```{r}
+
+```
+
+
+### WTA data
+```{r}
+exp_mat_list <- list()
+seu_obj_list <- list()
+for (i in meta.info$SampleID) {
+  obj_dir <- paste0(sample_dir[grepl(i, sample_dir)], "/filtered_matrix/")
+  exp_mat <- ReadMtx(mtx = paste0(obj_dir, "matrix.mtx.gz"), 
+                     features = paste0(obj_dir, "features.tsv.gz"),
+                     cells = paste0(obj_dir, "barcodes.tsv.gz"))
+  seu_obj_list[[i]] <- CreateSeuratObject(counts = exp_mat)
+  seu_obj_list[[i]][["percent.mt"]] <- PercentageFeatureSet(seu_obj_list[[i]], pattern = "^mt.")
+  seu_obj_list[[i]][["group"]] <- i
+}
+
+seu.obj <- merge(x = seu_obj_list[[1]], y = seu_obj_list[2:length(seu_obj_list)], add.cell.ids = meta.info$SampleGroup, merge.data = T)
+
+seu.obj$Group <- seu.obj$group
+for (i in meta.info$SampleID) {
+  seu.obj$Group[which(seu.obj$group == i)] <- meta.info$SampleGroup[which(meta.info$SampleID == i)]
+}
+# Add number of genes per UMI for each cell to metadata
+seu.obj$log10GenesPerUMI <- log10(seu.obj$nFeature_RNA) / log10(seu.obj$nCount_RNA)
+```
+
+## Quality control
+
+### Before quality control
+```{r}
+## Seurat QC plots
+VlnPlot(seu.obj, features = "nFeature_RNA", pt.size = 0, group.by = "Group") + NoLegend()
+
+VlnPlot(seu.obj, features = "nCount_RNA", pt.size = 0, group.by = "Group") + NoLegend()
+
+VlnPlot(seu.obj, features = "percent.mt", pt.size = 0, group.by = "Group") + NoLegend()
+
+
+FeatureScatter(seu.obj, feature1 = "nCount_RNA", feature2 = "percent.mt", group.by = "Group", split.by = "Group")
+
+FeatureScatter(seu.obj, feature1 = "nCount_RNA", feature2 = "nFeature_RNA", group.by = "Group", split.by = "Group")
+
+## summary QC plot by myself
+metadata <- seu.obj@meta.data
+# Visualize the number of cell counts per sample
+cells.ori <- data.frame(table(metadata$Group))
+ggbarplot(cells.ori, x = "Var1", y = "Freq",
+  fill = "Var1", color = "black", palette = "Set1",
+  label = TRUE,xlab = "",ylab = "nCells",legend = "none",
+  position = position_dodge(0.9))
+
+# Visualize the number UMIs/transcripts per cell
+metadata %>% 
+  	ggplot(aes(color=Group, x=nCount_RNA, fill= Group)) + 
+  	geom_density(alpha = 0.2) + 
+  	scale_x_log10() + 
+  	theme_classic() +
+  	ylab("Cell density") +
+  	geom_vline(xintercept = 500, linetype = "dashed") +
+    scale_fill_brewer(palette = "Set1")+
+    scale_color_brewer(palette = "Set1")
+
+# Visualize the number genes/transcripts per cell
+metadata %>% 
+  	ggplot(aes(color=Group, x=nFeature_RNA, fill= Group)) + 
+  	geom_density(alpha = 0.2) + 
+  	scale_x_log10() + 
+  	theme_classic() +
+  	ylab("Cell density") +
+  	geom_vline(xintercept = 300, linetype = "dashed") +
+    scale_fill_brewer(palette = "Set1")+
+    scale_color_brewer(palette = "Set1")
+
+# Visualize the number genes/transcripts per cell
+metadata %>% 
+  	ggplot(aes(color=Group, x=percent.mt, fill= Group)) + 
+ 	geom_density(alpha = 0.2) + 
+  	scale_x_log10() + 
+  	theme_classic() +
+  	ylab("Cell density") +
+  	geom_vline(xintercept = 20, linetype = "dashed") +
+    scale_fill_brewer(palette = "Set1")+
+    scale_color_brewer(palette = "Set1") 
+
+## MAD QC cutoff
+Cell.QC.Stat <- seu.obj@meta.data
+max.mito.thr <- median(Cell.QC.Stat$percent.mt) + 3*mad(Cell.QC.Stat$percent.mt)
+min.mito.thr <- median(Cell.QC.Stat$percent.mt) - 3*mad(Cell.QC.Stat$percent.mt)
+
+min.Genes.thr <- median(log10(Cell.QC.Stat$nFeature_RNA)) - 3*mad(log10(Cell.QC.Stat$nFeature_RNA))
+max.Genes.thr <- median(log10(Cell.QC.Stat$nFeature_RNA)) + 3*mad(log10(Cell.QC.Stat$nFeature_RNA))
+
+max.nUMI.thr <- median(log10(Cell.QC.Stat$nCount_RNA)) + 3*mad(log10(Cell.QC.Stat$nCount_RNA))
+min.nUMI.thr <- median(log10(Cell.QC.Stat$nCount_RNA)) - 3*mad(log10(Cell.QC.Stat$nCount_RNA))
+
+max.mito.thr
+10^min.Genes.thr
+10^min.nUMI.thr
+
+```
+
+### After quality control
+```{r}
+# Filter out low quality cells using selected thresholds - these will change with experiment
+seu.qc <- subset(x = seu.obj, 
+                 subset= (nCount_RNA >= 500) &
+                   (nFeature_RNA >= 300) &
+                   (log10GenesPerUMI > 0.80) &
+                   (percent.mt < 15))
+
+metadata <- seu.qc@meta.data
+# Visualize the number of cell counts per sample
+cells.ori <- data.frame(table(metadata$Group))
+ggbarplot(cells.ori, x = "Var1", y = "Freq",
+  fill = "Var1", color = "black", palette = "Set1",
+  label = TRUE,xlab = "",ylab = "nCells",legend = "none",
+  position = position_dodge(0.9))
+
+
+```
+
+## Normalizing the data
+```{r}
+seu.nor <- NormalizeData(seu.qc, normalization.method = "LogNormalize", scale.factor = 10000)
+#seu.nor <- NormalizeData(seu.nor)
+
+seu.nor <- FindVariableFeatures(seu.nor, selection.method = "vst", nfeatures = 2000)
+
+# Identify the 10 most highly variable genes
+top10 <- head(VariableFeatures(seu.nor), 10)
+
+# plot variable features with and without labels
+plot1 <- VariableFeaturePlot(seu.nor)
+plot2 <- LabelPoints(plot = plot1, points = top10, repel = TRUE)
+plot1 + plot2
+
+all.genes <- rownames(seu.nor)
+seu.nor <- ScaleData(seu.nor, features = all.genes)
+```
+
+## Perform linear dimensional reduction
+```{r}
+seu.nor <- RunPCA(seu.nor, features = VariableFeatures(object = seu.nor))
+
+seu.nor <- FindNeighbors(seu.nor, dims = 1:30)
+seu.nor <- FindClusters(seu.nor, resolution = 1)
+
+seu.nor <- RunUMAP(seu.nor, dims = 1:30)
+DimPlot(seu.nor, reduction = "umap",group.by = "seurat_clusters")
+
+DimPlot(seu.nor, reduction = "umap",group.by = "seurat_clusters", split.by = "Group")
+
+DimPlot(seu.nor, reduction = "umap",group.by = "Group")
+#saveRDS(seu.nor, file = "../results/Seurat_QC_PCA_UMAP.RDS")
+#seu.nor <- readRDS("../results/Seurat_QC_PCA_UMAP.RDS")
+```
+
+
+## Cell type annotation
+
+
+```{r}
+# load gene set preparation function
+source("../../../btla_seq/scbcr_seq/scripts/gene_sets_prepare.R")
+# load cell type annotation function
+source("../../../btla_seq/scbcr_seq/scripts/sctype_score_.R")
+source("../../../btla_seq/scbcr_seq/scripts/auto_detect_tissue_type.R")
+
+# DB file
+db_ = "../../../btla_seq/scbcr_seq/scripts/ScTypeDB_full.xlsx";
+#db_ = "../../../muc16_seq/scrnaseq/scripts_update/ScTypeDB_full.xlsx";
+
+tissue = "Immune system" # e.g. Immune system,Pancreas,Liver,Eye,Kidney,Brain,Lung,Adrenal,Heart,Intestine,Muscle,Placenta,Spleen,Stomach,Thymus 
+
+
+# prepare gene sets
+gs_list = gene_sets_prepare(db_, tissue)
+
+
+# get cell-type by cell matrix
+es.max = sctype_score(scRNAseqData = seu.nor@assays$RNA$scale.data, scaled = TRUE, 
+                      gs = gs_list$gs_positive, gs2 = gs_list$gs_negative) 
+
+# NOTE: scRNAseqData parameter should correspond to your input scRNA-seq matrix. 
+# In case Seurat is used, it is either pbmc[["RNA"]]@scale.data (default), pbmc[["SCT"]]@scale.data, in case sctransform is used for normalization,
+# or pbmc[["integrated"]]@scale.data, in case a joint analysis of multiple single-cell datasets is performed.
+
+# merge by cluster
+cL_resutls = do.call("rbind", lapply(unique(seu.nor@meta.data$seurat_clusters), function(cl){
+    es.max.cl = sort(rowSums(es.max[ ,rownames(seu.nor@meta.data[seu.nor@meta.data$seurat_clusters==cl, ])]), decreasing = !0)
+    head(data.frame(cluster = cl, type = names(es.max.cl), scores = es.max.cl, ncells = sum(seu.nor@meta.data$seurat_clusters==cl)), 10)
+}))
+sctype_scores = cL_resutls %>% group_by(cluster) %>% top_n(n = 1, wt = scores)  
+
+# set low-confident (low ScType score) clusters to "unknown"
+sctype_scores$type[as.numeric(as.character(sctype_scores$scores)) < sctype_scores$ncells/4] = "Unknown"
+print(sctype_scores[,1:3])
+
+
+seu.nor@meta.data$customclassif = ""
+for(j in unique(sctype_scores$cluster)){
+  cl_type = sctype_scores[sctype_scores$cluster==j,]; 
+  seu.nor@meta.data$customclassif[seu.nor@meta.data$seurat_clusters == j] = as.character(cl_type$type[1])
+}
+
+
+DimPlot(seu.nor, reduction = "umap", label = TRUE, repel = TRUE, group.by = 'customclassif')
+
+DimPlot(seu.nor, reduction = "umap", label = TRUE, repel = TRUE, group.by = 'customclassif', split.by = "Group")
+
+
+# cell.df <- data.frame(table(seu.nor$customclassif))
+# labs <- paste0(cell.df$Var1, "  (", cell.df$Freq, ")")
+# ggpie::ggpie(cell.df, "Freq", 
+#       label_info = labs,
+#       label_type = "circle", 
+#       label_pos = "out",
+#       fill = "Var1", 
+#       color = "white") +
+#   scale_fill_manual(values = c(ggsci::pal_lancet(palette = "lanonc")(9),
+#                                ggsci::pal_igv(palette = "default")(7))) + 
+#   theme(legend.position = "none")
+# ggsave(paste0("../results/wta_all/all_celltype_summary.pdf"), width = 7, height = 6.5)
+
+
+tissue = "Spleen"
+# prepare gene sets
+gs_list = gene_sets_prepare(db_, tissue)
+# get cell-type by cell matrix
+es.max = sctype_score(scRNAseqData = seu.nor@assays$RNA$scale.data, scaled = TRUE, 
+                      gs = gs_list$gs_positive, gs2 = gs_list$gs_negative) 
+
+# merge by cluster
+cL_resutls = do.call("rbind", lapply(unique(seu.nor@meta.data$seurat_clusters), function(cl){
+    es.max.cl = sort(rowSums(es.max[ ,rownames(seu.nor@meta.data[seu.nor@meta.data$seurat_clusters==cl, ])]), decreasing = !0)
+    head(data.frame(cluster = cl, type = names(es.max.cl), scores = es.max.cl, ncells = sum(seu.nor@meta.data$seurat_clusters==cl)), 10)
+}))
+sctype_scores = cL_resutls %>% group_by(cluster) %>% top_n(n = 1, wt = scores)  
+
+# set low-confident (low ScType score) clusters to "unknown"
+sctype_scores$type[as.numeric(as.character(sctype_scores$scores)) < sctype_scores$ncells/4] = "Unknown"
+print(sctype_scores[,1:3])
+
+
+seu.nor@meta.data$customclasssp = ""
+for(j in unique(sctype_scores$cluster)){
+  cl_type = sctype_scores[sctype_scores$cluster==j,]; 
+  seu.nor@meta.data$customclasssp[seu.nor@meta.data$seurat_clusters == j] = as.character(cl_type$type[1])
+}
+
+DimPlot(seu.nor, reduction = "umap", label = TRUE, repel = TRUE, group.by = 'customclasssp')
+
+DimPlot(seu.nor, reduction = "umap", label = TRUE, repel = TRUE, group.by = 'customclasssp', split.by = "Group")
+
+saveRDS(seu.nor, file = paste0("../results/All_SeuratObject_annotated.RDS"))
+```

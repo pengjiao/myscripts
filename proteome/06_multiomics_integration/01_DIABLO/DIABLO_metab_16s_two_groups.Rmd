@@ -1,0 +1,334 @@
+---
+title: "DIABLO metab 16s two groups"
+author: ""
+date: "7/15/2022"
+output: 
+  html_document:
+    toc: yes
+    toc_depth: 5 
+    toc_float: yes
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE,warning = F,message = F)
+```
+
+
+## Load library
+```{r}
+library(mixOmics)
+library(dplyr)
+library(DescTools)
+library(readxl)
+library(DescTools)
+library(robCompositions)
+library(tibble)
+library(stringr)
+library(BiocParallel)
+library(tidyselect)
+library(microbiome)
+```
+
+
+## PD & MCI
+```{r,fig.height=9,fig.width=11}
+load("../00_data_preparing/71samples_combat_metab_log_microb_species_var_dec.RData")
+condition <- list(c("PD", "MCI"), c("MCI", "AD"), c("PD", "AD"))
+nfeature <- 100
+metab <- metab_neg
+i <- condition[[1]]
+
+dir.create(paste0(paste(i, collapse="_"), "_results"))
+path <- paste0(paste(i, collapse="_"), "_results")
+```
+
+```{r}
+## data prepare
+met <- meta[meta$Group %in% i,]
+abun <- abun_tmp[met$ID, 1:nfeature]
+metab1 <- metab[met$ID, 1:nfeature]
+
+## data design
+data = list(metabolome = metab1,
+            microbiome = abun)
+Y = factor(met$Group)
+
+## design matrix
+design = matrix(0.1, ncol = length(data), nrow = length(data), 
+              dimnames = list(names(data), names(data)))
+diag(design) = 0
+
+## Tuning the number of components
+sgccda.res = block.splsda(X = data, Y = Y, ncomp = 5, 
+                         design = design)
+set.seed(123) 
+perf.diablo = perf(sgccda.res, validation = 'Mfold', folds = 10, nrepeat = 5)
+plot(perf.diablo)
+
+
+## Tuning keepX
+set.seed(123)
+test.keepX = list(metabolome = c(seq(10,50,5)),
+                microbiome = c(seq(10,50,5)))
+
+tune.TCGA = tune.block.splsda(X = data, Y = Y, ncomp = 2,
+                            test.keepX = test.keepX, design = design,
+                            validation = 'Mfold', folds = 10, nrepeat = 5,
+                            BPPARAM =BiocParallel::MulticoreParam(workers = parallel::detectCores()-1),
+                            dist = "centroids.dist")
+
+list.keepX = tune.TCGA$choice.keepX # set the optimal values of features to retain
+#list.keepX
+
+## Final model
+sgccda.res = block.splsda(X = data, Y = Y, ncomp = 2, 
+                        keepX = list.keepX, design = design)
+saveRDS(sgccda.res, file = paste0(path,"/finalModel_afterTune_DIABLO.rds"))
+```
+
+### plots
+```{r,fig.width=12,fig.height=10}
+plotDiablo(sgccda.res, ncomp = 1)
+plotDiablo(sgccda.res, ncomp = 2)
+plotIndiv(sgccda.res, ind.names = FALSE, legend = TRUE,title = paste0(paste(i,collapse = "_"),'_DIABLO'))
+
+## Variable plots
+plotVar(sgccda.res, var.names =T, style = 'graphics', cutoff=0.5, legend = TRUE)
+
+circosPlot(sgccda.res,  cutoff = 0.5, line = F,size.variables= 0.6, size.labels = 2.0,size.legend = 1.5)
+pdf(file = paste0(path, "/diablo_circosPlot05.pdf"), height = 10, width = 10)
+circosPlot(sgccda.res,  cutoff = 0.5, line = F,size.variables= 0.6, size.labels = 2.0,size.legend = 1.5)
+dev.off()
+
+pdf(file = paste0(path,"/diablo_circosPlot04.pdf"), height = 10, width = 10)
+circosPlot(sgccda.res,  cutoff = 0.4, line = F,size.variables= 0.6, size.labels = 2.0,size.legend = 1.5)
+dev.off()
+
+pdf(file = paste0(path,"/diablo_circosPlot03.pdf"), height = 10, width = 10)
+circosPlot(sgccda.res,  cutoff = 0.3, line = F,size.variables= 0.6, size.labels = 2.0,size.legend = 1.5)
+dev.off()
+
+# network(sgccda.res, blocks = c(1,2,3,4,5), cutoff = 0.4)
+plotLoadings(sgccda.res, 1,comp = 1, contrib = 'max', method = 'median')
+plotLoadings(sgccda.res, 2,comp = 1, contrib = 'max', method = 'median')
+plotLoadings(sgccda.res, 1,comp = 2, contrib = 'max', method = 'median')
+plotLoadings(sgccda.res, 2, comp = 2, contrib = 'max', method = 'median')
+
+cimDiablo(sgccda.res,legend.position = "topright",size.legend = 0.7,cluster = "column",comp=1,margins = c(5, 5))
+cimDiablo(sgccda.res,legend.position = "topright",size.legend = 0.7,cluster = "column",comp=2,margins = c(5, 5))
+cimDiablo(sgccda.res,legend.position = "topright",size.legend = 0.7,cluster = "column", comp=c(1,2),margins = c(5, 5))
+
+
+pdf(file = paste0(path,"/diablo_cimDiablot_pc1.pdf"), height = 20, width = 20)
+cimDiablo(sgccda.res,legend.position = "topright",size.legend = 1,cluster = "column", comp=c(1),margins = c(25, 20))
+dev.off()
+pdf(file = paste0(path,"/diablo_cimDiablot_pc2.pdf"), height = 20, width = 20)
+cimDiablo(sgccda.res,legend.position = "topright",size.legend = 1,cluster = "column", comp=c(2),margins = c(25,20))
+dev.off()
+pdf(file = paste0(path,"/diablo_cimDiablot_pc1pc2.pdf"), height = 20, width = 20)
+cimDiablo(sgccda.res,legend.position = "topright",size.legend = 1,cluster = "column", comp=c(1,2),margins = c(25, 20))
+dev.off()
+
+saveRDS(sgccda.res, file = paste0(path,"/sgccda.res.pd.mci.ad.RDS"))
+```
+
+
+## MCI & AD
+```{r,fig.height=9,fig.width=11}
+metab <- metab_neg
+i <- condition[[2]]
+
+dir.create(paste0(paste(i, collapse="_"), "_results"))
+path <- paste0(paste(i, collapse="_"), "_results")
+```
+
+```{r}
+## data prepare
+met <- meta[meta$Group %in% i,]
+abun <- abun_tmp[met$ID, 1:nfeature]
+metab1 <- metab[met$ID, 1:nfeature]
+
+## data design
+data = list(metabolome = metab1,
+            microbiome = abun)
+Y = factor(met$Group)
+
+## design matrix
+design = matrix(0.1, ncol = length(data), nrow = length(data), 
+              dimnames = list(names(data), names(data)))
+diag(design) = 0
+
+## Tuning the number of components
+sgccda.res = block.splsda(X = data, Y = Y, ncomp = 5, 
+                         design = design)
+set.seed(123) 
+perf.diablo = perf(sgccda.res, validation = 'Mfold', folds = 10, nrepeat = 5)
+plot(perf.diablo)
+
+
+## Tuning keepX
+set.seed(123)
+test.keepX = list(metabolome = c(seq(10,50,5)),
+                microbiome = c(seq(10,50,5)))
+
+tune.TCGA = tune.block.splsda(X = data, Y = Y, ncomp = 2,
+                            test.keepX = test.keepX, design = design,
+                            validation = 'Mfold', folds = 10, nrepeat = 5,
+                            BPPARAM =BiocParallel::MulticoreParam(workers = parallel::detectCores()-1),
+                            dist = "centroids.dist")
+
+list.keepX = tune.TCGA$choice.keepX # set the optimal values of features to retain
+#list.keepX
+
+## Final model
+sgccda.res = block.splsda(X = data, Y = Y, ncomp = 2, 
+                        keepX = list.keepX, design = design)
+saveRDS(sgccda.res, file = paste0(path,"/finalModel_afterTune_DIABLO.rds"))
+```
+
+### plots
+```{r,fig.width=12,fig.height=10}
+plotDiablo(sgccda.res, ncomp = 1)
+plotDiablo(sgccda.res, ncomp = 2)
+plotIndiv(sgccda.res, ind.names = FALSE, legend = TRUE,title = paste0(paste(i,collapse = "_"),'_DIABLO'))
+
+## Variable plots
+plotVar(sgccda.res, var.names =T, style = 'graphics', cutoff=0.5, legend = TRUE)
+
+circosPlot(sgccda.res,  cutoff = 0.5, line = F,size.variables= 0.6, size.labels = 2.0,size.legend = 1.5)
+pdf(file = paste0(path, "/diablo_circosPlot05.pdf"), height = 10, width = 10)
+circosPlot(sgccda.res,  cutoff = 0.5, line = F,size.variables= 0.6, size.labels = 2.0,size.legend = 1.5)
+dev.off()
+
+pdf(file = paste0(path,"/diablo_circosPlot04.pdf"), height = 10, width = 10)
+circosPlot(sgccda.res,  cutoff = 0.4, line = F,size.variables= 0.6, size.labels = 2.0,size.legend = 1.5)
+dev.off()
+
+pdf(file = paste0(path,"/diablo_circosPlot03.pdf"), height = 10, width = 10)
+circosPlot(sgccda.res,  cutoff = 0.3, line = F,size.variables= 0.6, size.labels = 2.0,size.legend = 1.5)
+dev.off()
+
+# network(sgccda.res, blocks = c(1,2,3,4,5), cutoff = 0.4)
+plotLoadings(sgccda.res, 1,comp = 1, contrib = 'max', method = 'median')
+plotLoadings(sgccda.res, 2,comp = 1, contrib = 'max', method = 'median')
+plotLoadings(sgccda.res, 1,comp = 2, contrib = 'max', method = 'median')
+plotLoadings(sgccda.res, 2, comp = 2, contrib = 'max', method = 'median')
+
+cimDiablo(sgccda.res,legend.position = "topright",size.legend = 0.7,cluster = "column",comp=1,margins = c(5, 5))
+cimDiablo(sgccda.res,legend.position = "topright",size.legend = 0.7,cluster = "column",comp=2,margins = c(5, 5))
+cimDiablo(sgccda.res,legend.position = "topright",size.legend = 0.7,cluster = "column", comp=c(1,2),margins = c(5, 5))
+
+
+pdf(file = paste0(path,"/diablo_cimDiablot_pc1.pdf"), height = 20, width = 20)
+cimDiablo(sgccda.res,legend.position = "topright",size.legend = 1,cluster = "column", comp=c(1),margins = c(25, 20))
+dev.off()
+pdf(file = paste0(path,"/diablo_cimDiablot_pc2.pdf"), height = 20, width = 20)
+cimDiablo(sgccda.res,legend.position = "topright",size.legend = 1,cluster = "column", comp=c(2),margins = c(25,20))
+dev.off()
+pdf(file = paste0(path,"/diablo_cimDiablot_pc1pc2.pdf"), height = 20, width = 20)
+cimDiablo(sgccda.res,legend.position = "topright",size.legend = 1,cluster = "column", comp=c(1,2),margins = c(25, 20))
+dev.off()
+
+saveRDS(sgccda.res, file = paste0(path,"/sgccda.res.pd.mci.ad.RDS"))
+```
+
+
+
+## PD & AD
+```{r,fig.height=9,fig.width=11}
+metab <- metab_neg
+i <- condition[[3]]
+
+dir.create(paste0(paste(i, collapse="_"), "_results"))
+path <- paste0(paste(i, collapse="_"), "_results")
+```
+
+```{r}
+## data prepare
+met <- meta[meta$Group %in% i,]
+abun <- abun_tmp[met$ID, 1:nfeature]
+metab1 <- metab[met$ID, 1:nfeature]
+
+## data design
+data = list(metabolome = metab1,
+            microbiome = abun)
+Y = factor(met$Group)
+
+## design matrix
+design = matrix(0.1, ncol = length(data), nrow = length(data), 
+              dimnames = list(names(data), names(data)))
+diag(design) = 0
+
+## Tuning the number of components
+sgccda.res = block.splsda(X = data, Y = Y, ncomp = 5, 
+                         design = design)
+set.seed(123) 
+perf.diablo = perf(sgccda.res, validation = 'Mfold', folds = 10, nrepeat = 5)
+plot(perf.diablo)
+
+
+## Tuning keepX
+set.seed(123)
+test.keepX = list(metabolome = c(seq(10,50,5)),
+                microbiome = c(seq(10,50,5)))
+
+tune.TCGA = tune.block.splsda(X = data, Y = Y, ncomp = 2,
+                            test.keepX = test.keepX, design = design,
+                            validation = 'Mfold', folds = 10, nrepeat = 5,
+                            BPPARAM =BiocParallel::MulticoreParam(workers = parallel::detectCores()-1),
+                            dist = "centroids.dist")
+
+list.keepX = tune.TCGA$choice.keepX # set the optimal values of features to retain
+#list.keepX
+
+## Final model
+sgccda.res = block.splsda(X = data, Y = Y, ncomp = 2, 
+                        keepX = list.keepX, design = design)
+saveRDS(sgccda.res, file = paste0(path,"/finalModel_afterTune_DIABLO.rds"))
+```
+
+### plots
+```{r,fig.width=12,fig.height=10}
+plotDiablo(sgccda.res, ncomp = 1)
+plotDiablo(sgccda.res, ncomp = 2)
+plotIndiv(sgccda.res, ind.names = FALSE, legend = TRUE,title = paste0(paste(i,collapse = "_"),'_DIABLO'))
+
+## Variable plots
+plotVar(sgccda.res, var.names =T, style = 'graphics', cutoff=0.5, legend = TRUE)
+
+circosPlot(sgccda.res,  cutoff = 0.5, line = F,size.variables= 0.6, size.labels = 2.0,size.legend = 1.5)
+pdf(file = paste0(path, "/diablo_circosPlot05.pdf"), height = 10, width = 10)
+circosPlot(sgccda.res,  cutoff = 0.5, line = F,size.variables= 0.6, size.labels = 2.0,size.legend = 1.5)
+dev.off()
+
+pdf(file = paste0(path,"/diablo_circosPlot04.pdf"), height = 10, width = 10)
+circosPlot(sgccda.res,  cutoff = 0.4, line = F,size.variables= 0.6, size.labels = 2.0,size.legend = 1.5)
+dev.off()
+
+pdf(file = paste0(path,"/diablo_circosPlot03.pdf"), height = 10, width = 10)
+circosPlot(sgccda.res,  cutoff = 0.3, line = F,size.variables= 0.6, size.labels = 2.0,size.legend = 1.5)
+dev.off()
+
+# network(sgccda.res, blocks = c(1,2,3,4,5), cutoff = 0.4)
+plotLoadings(sgccda.res, 1,comp = 1, contrib = 'max', method = 'median')
+plotLoadings(sgccda.res, 2,comp = 1, contrib = 'max', method = 'median')
+plotLoadings(sgccda.res, 1,comp = 2, contrib = 'max', method = 'median')
+plotLoadings(sgccda.res, 2, comp = 2, contrib = 'max', method = 'median')
+
+cimDiablo(sgccda.res,legend.position = "topright",size.legend = 0.7,cluster = "column",comp=1,margins = c(5, 5))
+cimDiablo(sgccda.res,legend.position = "topright",size.legend = 0.7,cluster = "column",comp=2,margins = c(5, 5))
+cimDiablo(sgccda.res,legend.position = "topright",size.legend = 0.7,cluster = "column", comp=c(1,2),margins = c(5, 5))
+
+
+pdf(file = paste0(path,"/diablo_cimDiablot_pc1.pdf"), height = 20, width = 20)
+cimDiablo(sgccda.res,legend.position = "topright",size.legend = 1,cluster = "column", comp=c(1),margins = c(25, 20))
+dev.off()
+pdf(file = paste0(path,"/diablo_cimDiablot_pc2.pdf"), height = 20, width = 20)
+cimDiablo(sgccda.res,legend.position = "topright",size.legend = 1,cluster = "column", comp=c(2),margins = c(25,20))
+dev.off()
+pdf(file = paste0(path,"/diablo_cimDiablot_pc1pc2.pdf"), height = 20, width = 20)
+cimDiablo(sgccda.res,legend.position = "topright",size.legend = 1,cluster = "column", comp=c(1,2),margins = c(25, 20))
+dev.off()
+
+saveRDS(sgccda.res, file = paste0(path,"/sgccda.res.pd.mci.ad.RDS"))
+```

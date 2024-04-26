@@ -1,0 +1,290 @@
+---
+title: "Data analysis"
+author: ""
+date: "`r Sys.Date()`"
+output:
+  html_document:
+    number_sections: no
+    toc: yes
+    toc_depth: 6
+    toc_float: true
+    self_contained: true
+    thumbnails: true
+    lightbox: true
+    gallery: true
+    use_bookdown: false
+    highlight: haddock
+---
+
+## Load library
+```{r load packages, results='hide', message=F, warning=F,include=F}
+rm(list=ls())
+library(phyloseq)
+library(microbiome)
+library(tibble)
+library(dplyr)
+library(vegan)
+library(flextable)
+library(ggpubr)
+library(gginnards)
+library(patchwork)
+```
+
+```{r set color , include=F}
+# color set
+mycols <<- c(
+  "#3cb44b", "#4363d8", "#e6194b","#ffe119", 
+  "#911eb4", "#46f0f0", "#f032e6", "#bcf60c", "#fabebe",
+  "#008080", "#e6beff", "#9a6324", "#fffac8", "#800000",
+  "#aaffc3", "#808000", "#ffd8b1", "#000075", "#808080",
+  "#000000"
+)
+```
+
+## Import phyloseq
+```{r load data, message=F, warning=F,include=T}
+phy <- readRDS("../data_processing/gmu_16S_phyloseq_59samples.rds")
+print(phy) # 3570 taxa and 59 samples
+```
+
+## Data prcessing
+```{r}
+# processing raw data as needed
+phy_need <- phy
+print(phy_need)   # 3570 taxa and 59 samples
+
+#phy_tmp <- phy_need
+
+taxa_names(phy_need) <- paste0(tax_table(phy_need)[,4],"|",tax_table(phy_need)[,5],"|",rownames(tax_table(phy_need)))
+phy_core <- core(phy_need, detection = 5, prevalence = .2) # change parameter if needed
+print(phy_core)   # 740 taxa and 59 samples
+
+# metat_tmp <- meta(phy_core)
+# metat_tmp$Groups<-cut(metat_tmp$age,c(20,40,60,80),c("20-40", "40-60", "60-80"),ordered_result = T)
+# metat_tmp$group6<-cut(metat_tmp$age,c(20,30,40,50,60,70,80),c("20-30", "30-40", "40-50", "50-60", "60-70", "70-80"),ordered_result = T)
+# sample_data(phy_core) <- metat_tmp
+```
+
+## Beta diversity
+```{r message=F,warning=F}
+pseq.rel <-microbiome::transform(phy_core, "compositional")
+input_meta <- meta(pseq.rel) %>% dplyr::select(Groups)
+input_meta$Groups <- factor(input_meta$Groups,levels = c("Control","Model","Model_AC","Model_AC_GV971L","Model_AC_GV971H"))
+```
+
+### PCoA
+#### Global
+```{r fig.height= 5, fig.width=8, fig.align='center',echo=F, message=F, warning=F,results=TRUE}
+sample_data(pseq.rel) <- data.frame(apply(sample_data(pseq.rel),2,as.factor))
+sample_data(pseq.rel)$Groups <- factor(sample_data(pseq.rel)$Groups,levels = c("Control","Model","Model_AC","Model_AC_GV971L","Model_AC_GV971H"))
+
+pseq.rel.ord <- ordinate(pseq.rel,method = "PCoA",distance = "bray")
+
+abun <- t(abundances(pseq.rel))
+
+set.seed(971)
+
+permanova <- vegan::adonis2(abun ~ Groups,
+                    data = input_meta, permutations=999, method = "bray",by="margin")
+
+sink(file = "PERMANOVA_Groups_global.txt")
+permanova
+sink()
+
+# test for group distribution homogeneity
+dist <- vegan::vegdist(abun)
+
+# visualization landscape
+pmu_test <- permutest(betadisper(dist, input_meta$Groups))
+pdf(file =  "PCoA_bray_Groups_global.pdf",width = 6.7,height = 5)
+p <- plot_ordination(pseq.rel, pseq.rel.ord, color = "Groups",type = "samples")+
+   ggtitle("PCoA - Bray curtis") + geom_point(size = 3) + stat_ellipse()+
+   ggtitle(paste0("adonis R2: ",round(permanova["Groups",]$R2,digits = 3),
+                  "; P-value: ",round(permanova["Groups",]$`Pr(>F)`,digits = 3),
+                  "; Homogeneity P-value:",round(pmu_test$tab["Groups",]$`Pr(>F)`,digits = 3)))+
+  theme(plot.title = element_text(size = 10))
+print(p)
+dev.off()
+```
+
+#### Pairwise permanova
+```{r, echo=F, message=F,warning=F,eval=T,results="show",fig.height= 6, fig.width=10, fig.align='center'}
+
+group_name <- unique(input_meta$Groups)
+ 
+adonis_result_two <- NULL
+
+for (i in 1:(length(group_name) - 1)) {
+    for (j in (i + 1):length(group_name)) {
+        group_ij <- subset(input_meta, Groups %in% c(as.character(group_name[i]), as.character(group_name[j])))
+        group_ij$Groups <- factor(group_ij$Groups,levels = c(as.character(group_name[i]), as.character(group_name[j])))
+        #group_ij$sex <- as.factor(group_ij$sex)
+        otu_ij <- abun[rownames(group_ij), ]
+        adonis_result_otu_ij <- adonis2(otu_ij ~  Groups , group_ij, permutations = 999, distance = 'bray',by="margin")     
+        
+        adonis_result_two <- rbind(adonis_result_two, c(paste(group_name[i], group_name[j], sep = '/'), 'Bray-Curtis', unlist(data.frame(adonis_result_otu_ij, check.names = FALSE)[1, ])))
+    }
+}
+
+adonis_result_two <- data.frame(adonis_result_two, stringsAsFactors = FALSE)
+names(adonis_result_two) <- c('group', 'distance', 'Df', 'Sums of squares', 'R2','F', 'Pr(>F)')
+
+# pairwise result
+adonis_result_two 
+write.csv(adonis_result_two ,file = "PERMANOVA_Groups_pairwise.csv")
+
+dist <- vegdist(abun)
+pmu_test <-permutest(betadisper(dist, input_meta$Groups))
+p <- plot_ordination(pseq.rel, pseq.rel.ord, col = "Groups")+
+   ggtitle("PCoA - Bray curtis") + geom_point(size = 3) + stat_ellipse()+
+   ggtitle(paste0("adonis R2: ",round(permanova["Groups",]$R2,digits = 3),
+                  "; P-value: ",round(permanova["Groups",]$`Pr(>F)`,digits = 3),
+                  "; Homogeneity P-value:",round(pmu_test$tab["Groups",]$`Pr(>F)`,digits = 3)))+
+  theme(plot.title = element_text(size = 10))+ scale_color_manual('Groups', values=mycols[1:length(group_name)])
+
+
+padj <- p.adjust(adonis_result_two[,"Pr(>F)"],method = "BH")
+tab1 <- data.frame("pairs"=adonis_result_two[,1],"R2"=round(as.numeric(adonis_result_two[,"R2"]),digits = 3),
+                   "pvalue"=adonis_result_two[,"Pr(>F)"],"padj"=padj)
+tab2 <- ggtexttable(tab1, rows = NULL, 
+                    theme = ttheme("blank")) %>% 
+    tab_add_hline(at.row = 1:2, row.side = "top", linewidth = 1)  %>% 
+    tab_add_hline(at.row = nrow(tab1)+1, row.side = "bottom", linewidth = 1)  
+
+p2 <- p + tab2
+
+pdf(file =  "PCoA_bray_Groups_pairwise.pdf",width = 15,height = 7)
+print(p2)
+dev.off()
+
+```
+
+### UPGMA
+```{r}
+#dir.create("structure/beta")
+
+library(vegan)
+library(phangorn)
+
+up=upgma(vegdist(abun, method="bray"))
+
+col.vec <- mycols[as.factor(input_meta$Groups)]
+
+pdf(file = "UPGMA_bray.pdf",width=10,height = 40)
+plot(up,type="phylogram",main="UPGMA phylogram",tip.color=col.vec)
+legend("topleft",legend = levels(input_meta$Groups),fill=mycols[1:length(unique(input_meta$Groups))])
+dev.off()
+# 
+# upgma <- hclust(vegdist(abun, method="bray"), method = 'average')
+# upgma
+#  
+# plot(upgma, hang=-1,main = 'UPGMA\n(Bray-curtis distance)', sub = '', xlab = 'Sample', ylab = 'Height')
+
+
+
+```
+
+#### NMDS
+
+
+```{r echo=F, message=F, warning=F,fig.height= 5, fig.width=8, fig.align='center',results="hide" }
+#sample_data(pseq.rel) <- input_meta
+pseq.rel.ord <- ordinate(pseq.rel,method = "NMDS",distance = "bray")
+
+# visualization landscape
+p <- plot_ordination(pseq.rel, pseq.rel.ord, col = "Groups")+
+   ggtitle("NMDS - Bray curtis") + geom_point(size = 3) + stat_ellipse()+     
+  #ggrepel::geom_text_repel(aes(label=sample_names(pseq.rel)))+    
+  #scale_colour_manual(values =  mycols)+
+  theme(axis.text.y=element_text(size=15),
+          axis.text.x = element_text(angle = 0, size = 15),
+          legend.text=element_text(size=15),
+          axis.title.x=element_text(size=15),
+          axis.title.y=element_text(size=15),
+          legend.title = element_text(size = 15) )+
+  scale_color_manual('Groups', values=mycols[1:length(unique(input_meta$Groups))])
+
+pdf(file =  "NMDS_bray_Groups.pdf",width = 8.7,height = 6.5)
+print(p)
+dev.off()
+
+```
+
+### PCA + boxplot
+```{r}
+# PCoA plot
+pseq.rel <- microbiome::transform(phy_core, "compositional")
+otu <- abundances(pseq.rel)
+input_meta <- meta(pseq.rel) %>% dplyr::select(Groups)
+input_meta$Groups <- factor(input_meta$Groups,levels = c("Control","Model","Model_AC","Model_AC_GV971L","Model_AC_GV971H"))
+# input_meta$sex <- as.factor(input_meta$sex)
+
+
+sample_data(pseq.rel) <- data.frame(apply(sample_data(pseq.rel),2,as.factor))
+sample_data(pseq.rel)$Groups <- factor(sample_data(pseq.rel)$Groups,levels = c("Control","Model","Model_AC","Model_AC_GV971L","Model_AC_GV971H"))
+pseq.rel.ord <- ordinate(pseq.rel,method = "PCoA",distance = "bray")
+
+# get first and second axis
+axis1 <- merge(pseq.rel.ord$vectors[,1],input_meta,by.x=0,by.y=0)
+axis1 <- axis1[,-4]%>% data.frame(row.names = 1)
+
+axis2 <- merge(pseq.rel.ord$vectors[,2],input_meta,by.x=0,by.y=0)
+axis2 <- axis2[,-4]%>% data.frame(row.names = 1)
+
+
+# plot scatterplot
+p1 <- plot_ordination(pseq.rel, pseq.rel.ord, col = "Groups")+
+  geom_point(size = 3) + 
+  #ggrepel::geom_text_repel(aes(label=sample_names(pseq.rel)))+    
+  scale_colour_manual('Groups',values =  mycols[1:length(unique(input_meta$Groups))])+
+  theme(axis.text.y=element_text(size=15),
+        axis.text.x = element_text(angle = 0, size = 15),
+        legend.text=element_text(size=15),
+        axis.title.x=element_text(size=15),
+        axis.title.y=element_text(size=15),
+        legend.title = element_text(size = 15),legend.position = "left" )
+
+print(p1)
+
+
+
+# plot top boxplot
+
+p2 <- ggplot(data = axis1,aes(x=Groups,y=x,col=Groups,fill=Groups)) + 
+  geom_boxplot(outlier.shape=NA,notch = F,notchwidth = 0.5,show.legend = F,alpha=0.6) +
+  scale_color_manual(values = mycols[1:length(unique(input_meta$Groups))])+
+  scale_fill_manual(values = mycols[1:length(unique(input_meta$Groups))])+
+  guides(fill = guide_legend(ncol = 1)) +
+  xlab("") +
+  ylab("")+
+  theme_minimal()+
+  theme(axis.text.x = element_blank())+
+  theme(axis.text.y = element_blank())+
+  coord_flip()
+
+print(p2)
+
+
+# plot right boxplot
+p3 <- ggplot(data = axis2,aes(x=Groups,y=x,col=Groups,fill=Groups)) + 
+  geom_boxplot(outlier.shape=NA,notch = F,notchwidth = 0.5,show.legend = F,alpha=0.6) +
+  scale_color_manual(values = mycols[1:length(unique(input_meta$Groups))])+
+  scale_fill_manual(values = mycols[1:length(unique(input_meta$Groups))])+
+  guides(fill = guide_legend(ncol = 1)) + 
+  xlab("") +
+  ylab("")+
+  theme_minimal()+
+  theme(axis.text.x = element_blank())+
+  theme(axis.text.y = element_blank())
+
+print(p3)
+  
+
+# output final figure
+p <- ((p2 / p1 ) +plot_layout(heights =  c(2, 13)) | ((plot_spacer() / p3) + plot_layout(heights =  c(2, 13)))) + 
+  plot_layout(widths = c(18,3.5))+plot_layout(guides="collect")  & theme(legend.text=element_text(size=18),legend.title = element_text(size =18))
+
+
+ggsave(p,filename = "PCoA_complexe_plot_Groups.pdf",device = "pdf",dpi = 300,width = 12,height = 9)
+
+```

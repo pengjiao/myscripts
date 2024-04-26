@@ -1,0 +1,209 @@
+---
+title: "Data analysis"
+author: ""
+date: "`r Sys.Date()`"
+output:
+  html_document:
+    number_sections: no
+    toc: yes
+    toc_depth: 6
+    toc_float: true
+    self_contained: true
+    thumbnails: true
+    lightbox: true
+    gallery: true
+    use_bookdown: false
+    highlight: haddock
+---
+
+## Load library
+```{r load packages, results='hide', message=F, warning=F,include=F}
+rm(list=ls())
+library(phyloseq)
+library(microbiome)
+library(tibble)
+library(dplyr)
+library(vegan)
+library(flextable)
+library(ggpubr)
+library(gginnards)
+library(patchwork)
+```
+
+```{r set color , include=F}
+# color set
+mycols <<- c(
+  "#3cb44b", "#4363d8", "#e6194b","#ffe119", 
+  "#911eb4", "#46f0f0", "#f032e6", "#bcf60c", "#fabebe",
+  "#008080", "#e6beff", "#9a6324", "#fffac8", "#800000",
+  "#aaffc3", "#808000", "#ffd8b1", "#000075", "#808080",
+  "#000000"
+)
+```
+
+## Import phyloseq
+```{r load data, message=F, warning=F,include=T}
+phy <- readRDS("../data_processing/gmu_16S_phyloseq_59samples.rds")
+print(phy) # 3570 taxa and 59 samples
+```
+
+## Data prcessing
+```{r}
+# processing raw data as needed
+phy_tmp <- phy
+```
+
+## Alpha diversity
+```{r alpha fun,echo=F, results='hide', message=F, warning=F,include=F}
+plot_alpha <- function(input_phy,selected_col,input_levels,div_type,outname,col,legend=T,width=7,height=10,input_div=div){
+  # add a new col
+  sample_data(input_phy)$col_sel <- factor(unlist(sample_data(input_phy)[,colnames(meta(input_phy)) == selected_col]), levels = input_levels)
+  
+  # comparison
+  allcomb <- combn(input_levels,m = 2)
+  if(length(input_levels) >2){
+    my_compare <- lapply(1:dim(allcomb)[2],function(i){ allcomb[,i]})
+  }  else{
+    my_compare <- list(input_levels)
+  }
+  
+  # plot
+  alpha <- ggplot(aes_string( x = sample_data(input_phy)$col_sel , y = div_type, color = sample_data(input_phy)$col_sel),data=input_div)+
+    geom_boxplot(outlier.shape=NA,notch = T,alpha=0) +
+    scale_x_discrete(limits = levels(as.factor(sample_data(input_phy)$col_sel)))+
+    guides(fill = guide_legend(ncol = 1)) +
+    geom_point(size=0.5, position=position_jitterdodge(jitter.width =0.3,jitter.height=0,dodge.width=0.9)) +
+    scale_color_manual(values = col)+
+    xlab("") +
+    theme_bw()+
+    stat_compare_means(comparisons = my_compare, method = "wilcox.test", label = "p.format",na.rm = T)+
+    theme(strip.text.x = element_text(size = 15)) +
+    theme(text = element_text(size = 15,family = "sans")) +
+    theme(axis.text.x = element_text(angle = 45,size=12,vjust=1,hjust=1))+
+    theme(axis.text.y = element_text(size=15))
+  alpha$layers[[which_layers(alpha,"GeomSignif")]]$aes_params$family <- "sans"
+
+  if (legend != T ){
+    alpha <- alpha + theme(legend.position="none")
+  }
+  ggsave(alpha, filename = outname, dpi = 300, height = height, width =width, units = "cm")
+  #print(alpha)
+}
+```
+
+### Table
+```{r , echo=F, message=F, warning=F}
+ps.alpha <- phyloseq::rarefy_even_depth(phy_tmp)
+
+metat_alpha <- meta(ps.alpha ) 
+dim(metat_alpha ) # 59 10
+metat_alpha$Groups <- factor(metat_alpha$Groups,levels = c("Control","Model","Model_AC","Model_AC_GV971L","Model_AC_GV971H"))
+sample_data(ps.alpha) <- metat_alpha
+
+# get all index
+set.seed(971)
+div <- microbiome::alpha(ps.alpha,index="all")
+write.csv(div,file = "alpha_index_table_Groups.csv")
+```
+
+### Auto plot of shannon, chao1 and simpson evenness
+```{r fig.height= 6, fig.width=4, fig.align='center',echo=F, message=F, warning=F}
+input_lvl <- c("Control","Model","Model_AC","Model_AC_GV971L","Model_AC_GV971H")
+groups <- "Groups"
+
+for( i in c("diversity_shannon","chao1","evenness_simpson")){
+  plot_alpha(input_phy=ps.alpha,selected_col = groups,input_levels=input_lvl,div_type = i,
+           outname = paste0("alpha_",i,"_",groups,".pdf"),col = mycols,legend =F,width=15,height=17.5,input_div = div)
+}
+```
+
+### Manuel plot
+```{r}
+#input_lvl <- c("control","slow","fast")
+input_phy=ps.alpha
+selected_col = "Groups"
+input_levels <- c("G1","G2","G3","G4")
+col = mycols
+legend =F
+width=15
+height = 13
+input_div = div
+
+for( div_type in c("diversity_shannon","chao1","evenness_simpson")){
+  
+  outname = paste0("alpha_",div_type,"_",selected_col,".pdf")
+  
+  sample_data(input_phy)$col_sel <- factor(unlist(sample_data(input_phy)[,colnames(meta(input_phy)) == selected_col]), levels = input_levels)
+  
+  # comparison
+  allcomb <- combn(input_levels,m = 2)
+  if(length(input_levels) >2){
+    my_compare <- lapply(1:dim(allcomb)[2],function(i){ allcomb[,i]})
+  }  else{
+    my_compare <- list(input_levels)
+  }
+  
+  # plot
+  alpha <- ggplot(aes_string( x = sample_data(input_phy)$col_sel , y = div_type, color = sample_data(input_phy)$col_sel),data=input_div)+
+    geom_boxplot(outlier.shape=NA,notch = T,alpha=0) +
+    scale_x_discrete(limits = levels(as.factor(sample_data(input_phy)$col_sel)))+
+    guides(fill = guide_legend(ncol = 1)) +
+    geom_point(size=0.5, position=position_jitterdodge(jitter.width =0.3,jitter.height=0,dodge.width=0.9)) +
+    scale_color_manual(values = col)+
+    xlab("") +
+    theme_bw()+
+    stat_compare_means(comparisons = my_compare, method = "wilcox.test", label = "p.format",na.rm = T)+
+    theme(strip.text.x = element_text(size = 15)) +
+    theme(text = element_text(size = 15,family = "sans")) +
+    theme(axis.text.x = element_text(angle = 45,size=15,vjust=1,hjust=1))+
+    theme(axis.text.y = element_text(size=15))
+  alpha$layers[[which_layers(alpha,"GeomSignif")]]$aes_params$family <- "sans"
+
+  if (legend != T ){
+    alpha <- alpha + theme(legend.position="none")
+  }
+  ggsave(alpha, filename = outname, dpi = 300, height = height, width =width, units = "cm")
+  #print(alpha)
+}
+```
+
+### Manuel plot 2
+```{r}
+#groups = "Groups"
+merged_tab <- merge(div,meta(ps.alpha),by=0)
+dim(merged_tab) # 27 60=1+22+37
+
+allcomb <- combn(input_lvl,m = 2)
+my_compare <- lapply(1:dim(allcomb)[2],function(i){ allcomb[,i]})
+
+p1 <- ggpubr::ggviolin(merged_tab, x = groups, y = "diversity_shannon", fill = groups,
+         palette = mycols,
+         add = "boxplot", add.params = list(fill = "white"))+
+    stat_compare_means(comparisons = my_compare, method = "wilcox.test", label = "p.signif",na.rm = T)+
+  theme(legend.position = "none")+
+  scale_x_discrete(limits = input_lvl)+
+    theme(axis.text.x = element_text(angle = 45,size=12,hjust = 1))+
+  xlab("")
+
+p2 <- ggpubr::ggviolin(merged_tab, x = groups, y = "evenness_simpson", fill = groups,
+         palette =mycols,
+         add = "boxplot", add.params = list(fill = "white"))+
+    stat_compare_means(comparisons = my_compare, method = "wilcox.test", label = "p.signif",na.rm = T)+
+  theme(legend.position = "none")+
+    theme(axis.text.x = element_text(angle = 45,size=12,hjust = 1))+
+  scale_x_discrete(limits = input_lvl)+
+  xlab("")
+
+p3 <- ggpubr::ggviolin(merged_tab, x = groups, y = "chao1", fill = groups,
+         palette =mycols,
+         add = "boxplot", add.params = list(fill = "white"))+
+    stat_compare_means(comparisons = my_compare, method = "wilcox.test", label = "p.signif",na.rm = T)+
+  theme(legend.position = "none")+
+    theme(axis.text.x = element_text(angle = 45,size=12,hjust = 1))+
+  scale_x_discrete(limits = input_lvl)+
+  xlab("")
+
+p=p1+p2+p3
+ggsave(paste0("alpha_diversities_",groups,".pdf"),width = 14,height = 7)
+```
+

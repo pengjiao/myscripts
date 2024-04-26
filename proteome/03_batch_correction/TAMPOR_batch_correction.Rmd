@@ -1,0 +1,148 @@
+---
+title: "Untitled"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+```{r}
+library(proBatch)
+library(knitr)
+library(lubridate)
+library(stringr)
+require(dplyr)
+require(tibble)
+require(ggplot2)
+library(readxl)
+library(dplyr)
+library(tibble)
+library(stringr)
+library(PCAtools)
+```
+
+
+```{r}
+meta <- read_xlsx("../probatch/input/proteomics_2batchs_files_info (1).xlsx")
+df <- read.csv("../input/328_samples_proteomics.csv") %>% data.frame()
+df$sample <- df[,1]
+df$sample <- as.factor(df$sample)
+df$sample<- gsub("_","-", df$sample)
+df1 <- merge(meta,df,by="sample")
+write.csv(df1,"328 samples with time_batch.csv")
+
+```
+
+
+
+```{r}
+dat <- read.csv("328 samples with time_batch.csv")
+df1 <- t(df[,-1]) %>% data.frame()
+df1 <- df1[-454,]
+df2 <- apply(df1,2,as.numeric) %>% data.frame()
+colnames(df1) <- dat$sample
+colnames(df2) <- dat$sample
+rownames(df2) <- rownames(df1)
+traits <- dat[,8] %>%data.frame()
+rownames(traits) <-  make.names(dat$sample,unique = T)
+
+colnames(df2) <- rownames(traits)
+
+
+traits$GIS <-NA
+#traits$GIS[1] <-'GIS'
+#traits[which(rownames(traits)=="GV.HC.BL.061"),2] <- 'GIS'
+colnames(traits)[1] <- 'Batch'
+
+
+```
+
+
+# batch correction using TAMPOR
+
+```{r}
+
+outputSuffix = "TAMPOR"      #Filename Suffix for some outputs, and name of automatically created subfolder for output
+noGIS=T        #If TRUE, the next setting and GISchannels settings are ignored, and all samples in each batch are taken as GIS
+                   #(assumes batch randomization with trait balance)
+useAllNonGIS=FALSE #if TRUE, all randomized samples in the batch (except any that are GIS) are used for step 1b
+                   #(TAMPOR equation1, second term) rowwise multiplier calculation
+                   #if FALSE, only GIS channels are used
+batchPrefixInSampleNames=FALSE #If TRUE, sample names should have format "batch.channel.(...)"
+                               #If FALSE, it is recommended you have a GIS column in traits provided,
+                               #with GIS samples specified "GIS" or TRUE and other samples NA
+GISchannels=c("1","151")     #TMT batch channel(s) that are GIS controls in every batch where they appear, or full unique
+                               #sample name(s) from traits rownames and abundance column names. At least one should be present
+                               #in every batch; additive with specification of GIS samples in provided traits GIS column.
+iterations=250    #How many times (max) will abundance matrix (dat) be subjected to 2-way table median polish?
+                   #If convergence is reached sooner, not all iterations will be run.
+samplesToIgnore=c("NONE")      #These samples have all values initially set to NA, & are removed from matrices used for visualization.
+                               #Useful for comparison of output without known outliers to prior output. If none, specify any string
+                               #not equal to a column name of the inputAbundanceCSV; E.g. "NONE"
+meanOrMedian="median"  #must be a valid R function, e.g. 'mean' or 'median'; median is recommended unless robustness to outliers
+                       #is not required.
+removeGISafter=FALSE   #Should samples designated as GIS be removed before visualization of variance and MDS?
+minimumBatchSize=5     #batches with fewer samples will not be used or kept in data for batch variance removal [default=5]
+parallelThreads=8      #doParallel library will run this many threads locally to split steps 1a and 1b batchwise calculations,
+                       #speeding processing time [default=2]
+
+path=getwd()    
+
+#data <- filterred_raw_data_proteomics_328subjects[,-1]
+#colnames(data) <- colnames(df2)
+#rownames(data) <- make.names(filterred_raw_data_proteomics_328subjects$Gene.names,unique=T)
+#data1 <- data[which(rownames(data) %in% rownames(df2)),]
+#TAMPORlist.GIS <- TAMPOR(df1, traits, noGIS=FALSE, useAllNonGIS=FALSE, GISchannels=c("1","151"),
+ #                 parallelThreads=parallelThreads, outputSuffix="GISonly")
+#traits1 <- traits
+#traits1$GIS <-NA
+TAMPORlist.noGIS <- TAMPOR(df2, traits, noGIS=TRUE, batchPrefixInSampleNames=F, parallelThreads=parallelThreads,
+                    outputSuffix="noGIS")
+```
+# pca after batch correction
+```{r}
+dat_after <- TAMPORlist.noGIS$cleanRelAbun
+dat1 <- data.frame(dat_after)
+traits_after <- data.frame(TAMPORlist.noGIS$traits)
+
+traits_after$Batch <- as.character(traits_after$Batch)
+p2 <- PCAtools::pca(dat1,traits_after, scale = T)
+
+pdf("pca_batch_TQAMPOR.pdf", width = 9, height = 6)
+plot4 <- biplot(p2,
+       lab = '',
+       colby = 'Batch',
+       title = 'log2_data_TAMPOR_batch_correction',
+       hline = 0, vline = 0,
+       legendPosition = 'right')+
+     scale_colour_manual(values = c("royalblue","red2"))
+plot4
+dev.off()
+
+
+
+
+
+```
+# pca before correction
+
+```{r}
+#p3 <- PCAtools::pca(df2,traits, scale = T)
+traits$Batch <- as.character(traits$Batch)
+p3 <- PCAtools::pca(df2,traits, scale = T)
+#pdf("pca_batch_TQAMPOR.pdf", width = 9, height = 6)
+biplot(p3,
+       lab = '',
+       colby = 'Batch',
+       title = 'log2_data_TAMPOR_batch_correction',
+       hline = 0, vline = 0,
+       legendPosition = 'right')+
+     scale_colour_manual(values = c("royalblue","red2"))
+
+
+
+```
+
+

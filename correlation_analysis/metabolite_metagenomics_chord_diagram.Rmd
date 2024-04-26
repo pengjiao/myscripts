@@ -1,0 +1,97 @@
+---
+title: "metabolite_metagenomics_chord_diagram"
+author: ""
+date: "2021/4/11"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## library
+```{r}
+library(rstatix)
+library(see)
+library(circlize)
+library(stringr)
+```
+
+
+## data
+```{r}
+load("../input/3omics_combined/SixHosp_5groups_319subjects_3omics.RData")
+load("../input/metag_structure/SixHosp_metagenomics_208subjects_meta.RData")
+
+otu_dat <- data.frame(otu_dat)
+otu_names <- str_split(colnames(otu_dat), "s__", simplify = T)[,2]
+colnames(otu_dat) <- otu_names
+int_id <- intersect(rownames(metab), rownames(otu_dat))
+
+metab_df <- metab[match(int_id, rownames(metab)),]
+otu_df <- otu_dat[match(int_id, rownames(otu_dat)),]
+
+
+
+vars1 <- apply(metab_df, 2, var)
+vars2 <- apply(otu_df, 2, var)
+
+metab_sel <- metab_df[,order(vars1, decreasing = T)[1:100]]
+otu_sel <- otu_df[,order(vars2, decreasing = T)[1:100]]
+
+# metab_sel <- metab_df
+# otu_sel <- otu_df
+
+
+df <- cbind(metab_sel, otu_sel)
+
+names1 <- colnames(metab_sel)
+names2 <- colnames(otu_sel)
+
+# cor.dat <- cor_test(df, vars = names1, vars2 = names2)
+cor.mat <- cor(metab_sel, otu_sel)
+cor.mat <- abs(cor.mat)
+
+```
+
+
+```{r}
+metab_info <- read.csv("../input/rawdata/lcms.fia.hmdb.match.csv")
+
+info_dat <- metab_info[match(names1, metab_info$X),]
+info_dat <- info_dat[order(info_dat$Class),]
+cor.mat <- cor.mat[match(info_dat$X, rownames(cor.mat)),]
+cor.mat[cor.mat < 0.2] <- 0
+
+class_dat <- data.frame(table(info_dat$Class))
+
+my_col <- NULL
+for (i in 1:nrow(class_dat)) {
+  my_col <- c(my_col, rep(as.character(see::metro_colors())[i], class_dat$Freq[i]))
+}
+
+```
+
+
+## plot
+```{r}
+
+cols <- c(rep("grey",ncol(otu_sel)), my_col)
+names(cols) <- c(colnames(otu_sel), colnames(metab_sel))
+
+pdf("chorddiagram.pdf", width = 20, height = 20)
+circos.clear()
+chordDiagram(cor.mat,
+             annotationTrack = "grid",grid.col = cols,
+             preAllocateTracks = list(track.height = max(strwidth(unlist(dimnames(cor.mat))))))
+circos.track(track.index = 1, panel.fun = function(x, y) {
+    xlim = get.cell.meta.data("xlim")
+    xplot = get.cell.meta.data("xplot")
+    ylim = get.cell.meta.data("ylim")
+    sector.name = get.cell.meta.data("sector.index")
+    circos.text(mean(xlim), ylim[1], sector.name, facing = "clockwise",
+            niceFacing = TRUE, adj = c(0, 0.1))
+}, bg.border = NA)
+dev.off()
+```
+

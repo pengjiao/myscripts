@@ -1,0 +1,408 @@
+---
+title: "SixHosp_CyTOF_pbmc_clusters60"
+author: ""
+date: "2022/03/21"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = T, warning = F, message = F)
+```
+
+## Load Library
+```{r}
+library(readxl)
+library(flowCore)
+library(CATALYST) # Preprocessing
+library(matrixStats)
+library(ggplot2)
+library(cowplot)
+library(purrr)
+library(ggpubr)
+library(reshape2)
+library(visdat)
+library(dplyr)
+library(limma)
+library(ggrepel)
+library(Rtsne)
+library(diffcyt)
+library(edgeR)
+library(RColorBrewer)
+library(ggsci)
+library(FlowSOM)
+library(ConsensusClusterPlus)
+library(SummarizedExperiment)
+library(SingleCellExperiment)
+library(cydar)
+# library(NNhuMG)
+```
+
+## Data Import
+```{r}
+## meta information
+meta_input <- read_excel("tumor_zsh_sh_meta.xlsx",sheet = 2)
+meta_used <- meta_input
+
+
+## panel information
+panel_input <- read_excel("tumor_zsh_sh_panel.xls")
+
+## fcs files
+setwd("input/")
+#fcs_input <- read.flowSet(meta_used$file_name[-c(1:3)],transformation = FALSE, truncate_max_range = FALSE)
+fcs_input <- read.flowSet(meta_used$file_name,transformation = FALSE, truncate_max_range = FALSE)
+
+setwd(".")
+#sce_sel <- readRDS("SixHosp_sce_10000cellsPerSample_20220321.RDS")
+# sce <- readRDS("SixHosp_sce_30500cellsPerGroup_TSNE_20220321.RDS")
+```
+
+## Data Preprocessing
+
+It is common practice to transform CyTOF marker intensities using arcsinh (hyperbolic inverse sine) with cofactor 5 to make the distributions more symmetric and to map them to a comparable range of expression, which is important for clustering. By default, the prepData() SCE constructor arcsinh transforms marker expressions with a cofactor of 5.
+(We also rename the columns in the flowSet to the antigen names from fcs_panel$antigen.)
+
+```{r}
+# specify levels for conditions & sample IDs to assure desired ordering 
+md <- meta_used
+group <- c("D-1", "D1","D3","D5","D7")
+md$condition <- factor(md$condition, levels = group)
+md$sample_id <- factor(md$sample_id, levels = md$sample_id[order(md$condition)])
+
+#mconstruct SingleCellExperiment (arcsinh transform)
+sce_ori <- CATALYST::prepData(fcs_input, panel_input, md, features = panel_input$fcs_colname)
+```
+
+### Subset 10000 cells per sample
+```{r}
+sce_col <- data.frame(colData(sce_ori))
+sce_col <- data.frame(apply(sce_col, 2, as.character))
+sce_col$order <- 1:nrow(sce_col)
+
+set.seed(1234)
+sce_sample <- sce_col %>% group_by(sample_id) %>% sample_n(10000, replace = T) %>% ungroup()
+sce_sample <- sce_sample[which(!duplicated(sce_sample$order)),]
+
+sce_sel <- sce_ori[,sce_sample$order]
+```
+
+
+## Diagnostic plots
+Diagnostic plots were used to quick check to verify whether the data we analyze globally represents what we expect.
+
+1. Per-sample smoothed densities of marker expression (arcsinh-transformed) of 28 markers:
+```{r,fig.height=8, fig.width=12}
+plotExprs(sce_sel, color_by = "condition")
+```
+
+2. Barplot showing the number of cells measured for each sample:
+```{r,fig.height=8, fig.width=20}
+plotCounts(sce_sel, group_by = "patient_id", color_by = "condition")
+plotCounts(sce_sel, color_by = "condition")
+```
+
+3. MDS plot
+MDS plot was used to calculate dissimilarities between samples using median marker expression over all cells.
+```{r,fig.height=8, fig.width=12}
+pbMDS(sce_sel, color_by = "condition", label_by = "sample_id")
+
+```
+
+4. Heatmap of the median (arcsinh-transformed) marker expression of 28 markers across all cells measured for each sample: 
+```{r, warning=FALSE,message=FALSE,fig.height=22, fig.width=12}
+plotExprHeatmap(sce_sel, bin_anno = TRUE, row_anno = TRUE)
+pdf("markers_heatmap.pdf",width = 20, height = 60)
+plotExprHeatmap(sce_sel, bin_anno = TRUE, row_anno = TRUE)
+dev.off()
+```
+
+## Marker ranking based on the non-redundancy score
+Non-redundancy scores for each of 28 markers and all samples:
+PCA-based non-redundancy score (NRS) was used to explain the variance observed in each sample. Markers with higher score explain a larger portion of variability present in a given sample.
+```{r,fig.height=8, fig.width=12}
+plotNRS(sce_sel, features = type_markers(sce_sel), color_by = "condition")
+```
+
+## Cell population identification with FlowSOM and ConsensusClusterPlus
+We conduct cell clustering with FlowSOM and ConsensusClusterPlus.
+The FlowSOM workflow consists of three steps: i) building a self-organizing map (SOM), where cells are assigned according to their similarities to 100 (by default) grid points (or, so-called codebook vectors or codes) of the SOM; ii) building a minimal spanning tree, which is mainly used for graphical representation of the clusters, is skipped in this pipeline; and iii) metaclustering of the SOM codes, is performed with the ConsensusClusterPlus package. These are wrapped in the CATALYST function cluster().
+```{r}
+set.seed(1234)
+sce_sel <- cluster(sce_sel, features = type_markers(sce_sel),xdim = 10, ydim = 10, maxK = 30, seed = 1234)
+
+```
+
+Heatmap of the median marker intensities of the 28 markers across the 20 cell populations obtained with FlowSOM after the metaclustering step with ConsensusClusterPlus:
+```{r, warning=FALSE,message=FALSE,fig.height=8, fig.width=12}
+plotClusterHeatmap(sce_sel, 
+    hm2 = NULL, k = "meta30", m = NULL,
+    cluster_anno = TRUE, draw_freqs = TRUE)
+```
+
+Distributions of marker intensities (arcsinh-transformed) of the 28 markers in the 20 cell populations obtained with FlowSOM after the metaclustering step with ConsensusClusterPlus:
+```{r, warning=FALSE,message=FALSE,fig.height=15, fig.width=20}
+plotClusterExprs(sce_sel, k = "meta30", features = "type")
+```
+
+## Visual representation with TSNE
+
+Select 500 cells per NC samples (61) to perform TSNE. In order to select same numbers of every group, 610 cells and 343 cells were selected per aMCI (50) and AD (89) samples separately.
+
+```{r}
+## select cells 
+samp <- as.numeric(table(md$condition))
+nc <- 500
+ncell <- nc*samp[1]
+
+
+sce_meta <- data.frame(colData(sce_sel))
+sce_meta <- data.frame(apply(sce_meta, 2, as.character))
+sce_meta$order <- 1:nrow(sce_meta)
+
+set.seed(1234)
+tsne_cell <- sce_meta %>% 
+    group_by(condition) %>% 
+    sample_n(ncell, replace = T) %>% 
+    ungroup()
+tsne_cell <- tsne_cell[which(!duplicated(tsne_cell$order)),]
+sce <- sce_sel[,tsne_cell$order]
+
+## TSNE
+set.seed(1234)
+sce <- runDR(sce, dr = "TSNE", features = "type")
+
+saveRDS(sce_sel, file = "zsh_sce_10000cellsPerSample.RDS")
+saveRDS(sce, file = "zsh_sce_45500cellsPerCondition_TSNE.RDS")
+```
+
+1. TSNE based on the arcsinh-transformed expression of the 26 markers in the cells:
+```{r, warning=FALSE,message=FALSE,fig.height=16, fig.width=18}
+markers <- type_markers(sce)
+tsne_plot <- list()
+for (i in 1:length(markers)) {
+  tsne_plot[[i]] <- plotDR(sce, "TSNE", color_by = markers[i])
+}
+ggarrange(plotlist = tsne_plot[1:6])
+ggarrange(plotlist = tsne_plot[7:12])
+ggarrange(plotlist = tsne_plot[13:18])
+ggarrange(plotlist = tsne_plot[19:24])
+ggarrange(plotlist = tsne_plot[25])
+
+```
+
+
+3. t-SNE  based on the arcsinh-transformed expression of the 26 markers in the cells:
+```{r, warning=FALSE,message=FALSE,fig.height=8, fig.width=15}
+plotDR(sce, "TSNE", color_by = "meta30") + 
+    theme(legend.position = "right")
+```
+
+4. t-SNE plot stratified by condition
+```{r, warning=FALSE,message=FALSE,fig.height=10, fig.width=15}
+## Facet per condition
+plotDR(sce, "TSNE", color_by = "meta30") + facet_wrap("condition") +
+    guides(color = guide_legend(ncol = 4, override.aes = list(size = 3)))
+ggsave("TSNE_D-1_D1_D3_D5_D7.pdf", width = 16, height = 8)
+
+# plotDR(sce[,which(sce$condition != "NC")], "TSNE", color_by = "meta60") + facet_wrap("condition") +
+#     guides(color = guide_legend(ncol = 3, override.aes = list(size = 3)))
+# 
+# plotDR(sce[,which(sce$condition != "AD")], "TSNE", color_by = "meta60") + facet_wrap("condition") +
+#     guides(color = guide_legend(ncol = 3, override.aes = list(size = 3)))
+```
+
+5. The 100 SOM codes colored according to the metaclustering with ConsensusClusterPlus into 20 cell populations presented after the dimension reduction with t-SNE and PCA:
+The SOM codes represent characteristics of the 100 (by default) clusters generated in the first step of the FlowSOM pipeline. The size of the points corresponds to the number of cells that were assigned to a given code.
+```{r}
+plotCodes(sce, k = "meta30")
+```
+
+
+## Differential analysis
+
+### Differential cell population abundance
+Relative abundance of the 20 populations in each sample (x-axis)：
+```{r, warning=FALSE,message=FALSE,fig.height=15, fig.width=30}
+FDR_cutoff <- 0.05
+plotAbundances(sce, k = "meta30", by = "sample_id") + 
+    theme(legend.position = "right")
+```
+
+Relative abundance of the 20 populations in each sample:
+```{r, warning=FALSE,message=FALSE,fig.height=28, fig.width=18}
+plotAbundances(sce, k = "meta30", by = "cluster_id")
+```
+
+Calculates tests for differential abundance of clusters, using generalized linear mixed models (GLMMs).
+We use the differential abundance methodology based on mixed models, which is implemented in the method diffcyt-DA-GLMM.
+
+
+#### D-1 vs. D1
+```{r}
+ei <- sce@metadata$experiment_info
+
+scenew <- sce
+ei_dat <- ei
+ei_dat$sample_id <- as.character(ei_dat$sample_id)
+ei_dat$condition <- as.character(ei_dat$condition)
+ei_dat$patient_id <- as.character(ei_dat$patient_id)
+
+colData(scenew)$sample_id <- as.character(colData(scenew)$sample_id)
+colData(scenew)$condition <- as.character(colData(scenew)$condition)
+colData(scenew)$patient_id <- as.character(colData(scenew)$patient_id)
+metadata(scenew)$experiment_info <- ei_dat
+sce_tg <- scenew[,which(scenew$condition == c("D-1", "D1"))]
+
+ei_tg <- subset(ei_dat, condition == c("D-1", "D1"))
+ei_tg$condition <- factor(ei_tg$condition, levels = c("D-1", "D1"))
+metadata(sce_tg)$experiment_info <- ei_tg
+
+da_formula_tg <- createFormula(ei_tg, 
+    cols_fixed = "condition", 
+    cols_random = "patient_id")
+design_tg <- createDesignMatrix(
+  ei_tg, cols_design = "condition")
+# Create contrast matrix
+contrast_tg <- createContrast(c(0, 1))
+# check
+nrow(contrast_tg) == ncol(design_tg)
+
+da_res_tg <- diffcyt(sce_tg, 
+    formula = da_formula_tg, contrast = contrast_tg,clustering_to_use = "meta30",
+    analysis_type = "DA", method_DA = "diffcyt-DA-GLMM",
+     verbose = FALSE)
+DT::datatable(as.data.frame(rowData(da_res_tg$res)))
+```
+
+DA test results and normalized proportions 20 cell populations NC and aMCI conditions
+```{r, warning=FALSE,message=FALSE,fig.height=7, fig.width=20}
+plotDiffHeatmap(sce, rowData(da_res_tg$res), all = TRUE, fdr = 0.05)
+
+```
+
+
+#### "D1" vs "D3"
+```{r}
+ei <- sce@metadata$experiment_info
+
+scenew <- sce
+ei_dat <- ei
+ei_dat$sample_id <- as.character(ei_dat$sample_id)
+ei_dat$condition <- as.character(ei_dat$condition)
+ei_dat$patient_id <- as.character(ei_dat$patient_id)
+
+colData(scenew)$sample_id <- as.character(colData(scenew)$sample_id)
+colData(scenew)$condition <- as.character(colData(scenew)$condition)
+colData(scenew)$patient_id <- as.character(colData(scenew)$patient_id)
+metadata(scenew)$experiment_info <- ei_dat
+sce_tg <- scenew[,which(scenew$condition == c("D1", "D3"))]
+
+ei_tg <- subset(ei_dat, condition == c("D1", "D3"))
+ei_tg$condition <- factor(ei_tg$condition, levels = c("D1", "D3"))
+metadata(sce_tg)$experiment_info <- ei_tg
+
+da_formula_tg <- createFormula(ei_tg, 
+    cols_fixed = "condition", 
+    cols_random = "patient_id")
+design_tg <- createDesignMatrix(
+  ei_tg, cols_design = "condition")
+# Create contrast matrix
+contrast_tg <- createContrast(c(0, 1))
+# check
+nrow(contrast_tg) == ncol(design_tg)
+
+da_res_tg <- diffcyt(sce_tg, 
+    formula = da_formula_tg, contrast = contrast_tg,clustering_to_use = "meta30",
+    analysis_type = "DA", method_DA = "diffcyt-DA-GLMM",
+     verbose = FALSE)
+DT::datatable(as.data.frame(rowData(da_res_tg$res)))
+```
+
+DA test results and normalized proportions 20 cell populations NC and aMCI conditions
+```{r, warning=FALSE,message=FALSE,fig.height=7, fig.width=20}
+plotDiffHeatmap(sce, rowData(da_res_tg$res), all = TRUE, fdr = 0.05)
+
+```
+
+#### "D3" vs "D5"
+```{r}
+scenew <- sce
+ei_dat <- ei
+ei_dat$sample_id <- as.character(ei_dat$sample_id)
+ei_dat$condition <- as.character(ei_dat$condition)
+ei_dat$patient_id <- as.character(ei_dat$patient_id)
+
+colData(scenew)$sample_id <- as.character(colData(scenew)$sample_id)
+colData(scenew)$condition <- as.character(colData(scenew)$condition)
+colData(scenew)$patient_id <- as.character(colData(scenew)$patient_id)
+metadata(scenew)$experiment_info <- ei_dat
+sce_tg <- scenew[,which(scenew$condition == c("D3","D5"))]
+
+ei_tg <- subset(ei_dat, condition == c("D3","D5"))
+ei_tg$condition <- factor(ei_tg$condition, levels = c("D3","D5"))
+metadata(sce_tg)$experiment_info <- ei_tg
+
+da_formula_tg <- createFormula(ei_tg, 
+    cols_fixed = "condition", 
+    cols_random = "patient_id")
+design_tg <- createDesignMatrix(
+  ei_tg, cols_design = "condition")
+# Create contrast matrix
+contrast_tg <- createContrast(c(0, 1))
+# check
+nrow(contrast_tg) == ncol(design_tg)
+
+da_res_tg <- diffcyt(sce_tg, 
+    formula = da_formula_tg, contrast = contrast_tg,clustering_to_use = "meta30",
+    analysis_type = "DA", method_DA = "diffcyt-DA-GLMM",
+     verbose = FALSE)
+DT::datatable(as.data.frame(rowData(da_res_tg$res)))
+```
+
+DA test results and normalized proportions 20 cell populations aMCI and AD conditions
+```{r, warning=FALSE,message=FALSE,fig.height=7, fig.width=20}
+plotDiffHeatmap(sce, rowData(da_res_tg$res), all = TRUE, fdr = 0.05)
+
+```
+
+#### "D5" vs "D7"
+```{r}
+scenew <- sce
+ei_dat <- ei
+ei_dat$sample_id <- as.character(ei_dat$sample_id)
+ei_dat$condition <- as.character(ei_dat$condition)
+ei_dat$patient_id <- as.character(ei_dat$patient_id)
+
+colData(scenew)$sample_id <- as.character(colData(scenew)$sample_id)
+colData(scenew)$condition <- as.character(colData(scenew)$condition)
+colData(scenew)$patient_id <- as.character(colData(scenew)$patient_id)
+metadata(scenew)$experiment_info <- ei_dat
+sce_tg <- scenew[,which(scenew$condition == c("D5", "D7"))]
+
+ei_tg <- subset(ei_dat, condition == c("D5", "D7"))
+ei_tg$condition <- factor(ei_tg$condition, levels = c("D5", "D7"))
+metadata(sce_tg)$experiment_info <- ei_tg
+
+da_formula_tg <- createFormula(ei_tg, 
+    cols_fixed = "condition", 
+    cols_random = "patient_id")
+design_tg <- createDesignMatrix(
+  ei_tg, cols_design = "condition")
+# Create contrast matrix
+contrast_tg <- createContrast(c(0, 1))
+# check
+nrow(contrast_tg) == ncol(design_tg)
+
+da_res_tg <- diffcyt(sce_tg, 
+    formula = da_formula_tg, contrast = contrast_tg,clustering_to_use = "meta30",
+    analysis_type = "DA", method_DA = "diffcyt-DA-GLMM",
+     verbose = FALSE)
+DT::datatable(as.data.frame(rowData(da_res_tg$res)))
+```
+
+DA test results and normalized proportions 20 cell populations aMCI and AD conditions
+```{r, warning=FALSE,message=FALSE,fig.height=7, fig.width=20}
+plotDiffHeatmap(sce, rowData(da_res_tg$res), all = TRUE, fdr = 0.05)
+
+```
+

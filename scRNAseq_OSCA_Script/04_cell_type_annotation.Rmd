@@ -1,0 +1,68 @@
+---
+title: "04_cell_type_annotation"
+author: ""
+date: "2022/10/21"
+output: 
+  html_document: 
+    toc: yes
+    toc_depth: 5
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE)
+```
+
+## Load library
+```{r}
+library(celldex)
+library(SingleR)
+library(SingleCellExperiment)
+library(BiocParallel)
+library(pheatmap)
+```
+
+## Data
+```{r}
+## Parameters
+this.path <- "../Results/04_cell_type_annotation"
+bp.params <- MulticoreParam(workers = 20)
+set.seed(1234)
+dir.create(this.path)
+
+## Data imoport
+corrected <- readRDS("../Results/02_normalization_and_dimensionality_reduction_clustering/DataIntegration_MNN_out_clustering_dimensionreduction.RDS")
+rownames(corrected) <- rowData(corrected)$Symbol
+
+## Reference for annotation
+ref <- BlueprintEncodeData()
+ref
+
+pred <- SingleR(test=corrected, ref=ref, 
+                assay.type.test = "reconstructed", 
+                labels=ref$label.main,
+                BPPARAM = bp.params)
+
+pdf(paste0(this.path, "/Annotation_SingleR_labelmain_score.pdf"), width = 12, height = 7)
+plotScoreHeatmap(pred)
+dev.off()
+
+tab <- table(Assigned=pred$pruned.labels, Cluster=corrected$cluster_twostep)
+# Adding a pseudo-count of 10 to avoid strong color jumps with just 1 cell.
+pdf(paste0(this.path, "/Heatmap_distribution_clusters_types.pdf"), width = 8, height = 7)
+pheatmap(log2(tab+10), color=colorRampPalette(c("white", "blue"))(101))
+dev.off()
+
+# Add annotation results onto sce object
+all(rownames(colData(corrected)) == rownames(pred))
+colData(corrected) <- cbind(colData(corrected), pred)
+# saveRDS(corrected, file = paste0(this.path, "/DataIntegration_MNN_out_clustering_dimensionreduction_annotationbySingleR.RDS"))
+
+# Visualize the uncorrected coordinates using a t-SNE plot
+plotTSNE(corrected,
+        colour_by = "labels",
+         text_by = "labels",
+        text_size = 3) +
+  scale_color_manual(values = as.character(c(see::metro_colors(), see::flat_colors())))
+ggsave(paste0(this.path, "/Annotation_TSNE_all.pdf"), width = 9, height = 5.5)
+```
+

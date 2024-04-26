@@ -1,0 +1,236 @@
+---
+title: "01_preprocess_and_quality_control"
+author: ""
+date: "2022/10/17"
+output: 
+  html_document: 
+    toc: yes
+    toc_depth: 5
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE)
+```
+
+There are 13 samples including in the project.
+
+## Load library
+```{r}
+library(BiocParallel) # parallel computation
+library(readxl)
+library(stringr)
+library(SingleCellExperiment)
+library(DropletUtils) # handling droplet-based scrnaseq data
+library(dplyr)
+library(tibble)
+library(scuttle)
+library(scater)
+library(AnnotationHub) # annotate genes(convert geneID to genename)
+library(AnnotationDbi) # annotation package
+library(rlang)
+library(report)
+```
+
+
+## Data prepare
+```{r}
+# Parameters
+this.path <- "../Results/01_preprocess_and_quality_control"
+bp.params <- MulticoreParam(workers = 20)
+set.seed(1234)
+dir.create(this.path)
+
+
+# Meta information for 13 samples
+meta.input <- read_excel("../Input/单细胞测序.xlsx", sheet = 3)
+files.list <- list.dirs("../00_cellranger/", full.names = F, recursive = F)
+sample.list <- intersect(meta.input$sample, files.list)
+meta <- meta.input[meta.input$sample %in% sample.list,]
+
+# Cellranger results path
+paths.list <- str_c("../00_cellranger/", 
+                    sample.list, 
+                    "/outs/filtered_feature_bc_matrix")
+names(paths.list) <- meta$sample
+
+# Creates a SingleCellExperiment(sce) object from the CellRanger output directories 
+sce.original <- read10xCounts(paths.list, col.names=TRUE, BPPARAM = bp.params)
+
+# Add meta info into the sce object
+sce <- sce.original
+colData(sce) <- colData(sce) %>% 
+  as.data.frame() %>% 
+  rownames_to_column(var = "RowName") %>% 
+  left_join(., meta.input, by = c("Sample" = "sample")) %>% 
+  column_to_rownames(var = "RowName") %>%
+  mutate(cluster = factor(cluster, levels = c("SHHD", "1", "2"))) %>% 
+  DataFrame()
+
+# Remove undetected genes
+detected.genes <- rowSums(counts(sce)) > 0
+sce <- sce[detected.genes,]
+
+```
+
+## Quality Control
+
+### Cells quality control
+
+For a normal distribution, a threshold defined with a distance of 3 MADs from the median retains about 99% of values. So we use 3 QC metrics to identify low-quality cells based on their expression profiles. If an observation is more than 3 MADs from the median, it will be defined as outlier.
+
+- sum: The total count for each cell.
+- detected: The number of detected genes.
+- subsets_Mito_percent: The percentage of reads mapped to mitochondrial transcripts.
+
+```{r, fig.width=9, fig.height=6}
+# Identifying the mitochondrial transcripts in our sce object
+is.mito <- which(grepl("^MT-", rowData(sce)$Symbol))
+
+# Compute QC metrics and add them to our sce object
+sce <- addPerCellQC(sce, subsets=list(Mito=is.mito), BPPARAM = bp.params)
+
+# Library size
+low.lib.size <- isOutlier(sce$sum, log=TRUE, type="lower")
+table(low.lib.size)
+
+# Number of genes
+low.n.features <- isOutlier(sce$detected, log=TRUE, type="lower")
+table(low.n.features)
+
+# Mitochrondial percentage
+high.Mito.percent <- isOutlier(sce$subsets_Mito_percent, type="higher")
+table(high.Mito.percent)
+
+# View the effect of the filtering
+colData(sce)$low.lib.size <- low.lib.size
+plotColData(sce, 
+            x="Sample", 
+            y="sum",
+            other_fields="cluster", 
+            colour_by = "low.lib.size") + 
+    facet_wrap(~cluster, nrow=1, scales = "free_x") + 
+    scale_y_log10() + 
+    labs(y = "Total count", title = "Total count") +
+    theme(axis.text.x = element_text(hjust = 1, angle = 45)) +
+    guides(colour=guide_legend(title="Discarded"))
+
+colData(sce)$low.n.features <- low.n.features
+plotColData(sce, 
+            x="Sample", 
+            y="detected",
+            other_fields="cluster", 
+            colour_by = "low.n.features") + 
+    facet_wrap(~cluster, nrow=1, scales = "free_x") + 
+    scale_y_log10() + 
+    labs(y = "Genes detected", title = "Genes detected") +
+    theme(axis.text.x = element_text(hjust = 1, angle = 45)) +
+    guides(colour=guide_legend(title="Discarded"))
+
+
+colData(sce)$high.Mito.percent <- high.Mito.percent
+plotColData(sce,  
+            x="Sample",
+            y="subsets_Mito_percent",
+            other_fields="cluster",
+            colour_by = "high.Mito.percent") + 
+    facet_wrap(~cluster, nrow=1, scales = "free_x") + 
+    labs(y = "Percentage mitochondrial UMIs",
+         title = "Mitochondrial UMIs") +
+    theme(axis.text.x = element_text(hjust = 1, angle = 45)) +
+    guides(colour=guide_legend(title="Discarded"))
+
+discard <- low.lib.size | low.n.features | high.Mito.percent
+sce$discard <- discard
+plotColData(sce, x="sum", y="subsets_Mito_percent", colour_by="discard")
+plotColData(sce, x="sum", y="detected", colour_by="discard")
+
+# Summary of discarded cells
+data.frame(`Library Size` = sum(low.lib.size),
+           `Genes detected` = sum(low.n.features),
+           `Mitochondrial UMIs` = sum(high.Mito.percent),
+           Total = sum(low.lib.size | low.n.features | high.Mito.percent))
+```
+
+#### Filtering out poor quality cells
+```{r, fig.width=9, fig.height=6}
+sce.filtered <- sce[, !sce$discard]
+
+plotColData(sce.filtered, 
+            x="Sample", 
+            y="sum",
+            other_fields="cluster", 
+            colour_by = "low.lib.size") + 
+    facet_wrap(~cluster, nrow=1, scales = "free_x") + 
+    scale_y_log10() + 
+    labs(y = "Total count", title = "Total count") +
+    theme(axis.text.x = element_text(hjust = 1, angle = 45)) +
+    guides(colour=guide_legend(title="Discarded"))
+
+plotColData(sce.filtered, 
+            x="Sample", 
+            y="detected",
+            other_fields="cluster", 
+            colour_by = "low.n.features") + 
+    facet_wrap(~cluster, nrow=1, scales = "free_x") + 
+    scale_y_log10() + 
+    labs(y = "Genes detected", title = "Genes detected") +
+    theme(axis.text.x = element_text(hjust = 1, angle = 45)) +
+    guides(colour=guide_legend(title="Discarded"))
+
+plotColData(sce.filtered, 
+        x="Sample", 
+        y="subsets_Mito_percent",
+        other_fields="cluster", 
+        colour_by = "high.Mito.percent") + 
+    facet_wrap(vars(cluster), nrow=1, scales = "free_x") + 
+    labs(y = "Percentage mitochondrial UMIs",
+         title = "Mitochondrial UMIs") +
+    theme(axis.text.x = element_text(hjust = 1, angle = 45)) +
+    guides(colour=guide_legend(title="Discarded"))
+
+```
+
+### Quality control and Filtering based on sparsity
+
+Cell sparsity: for each cell, the proportion of genes that are not detected
+Gene sparsity: for each gene, the proportion of cells in which it is not detected
+
+```{r}
+# Add gene QC metrics onto sce object
+## detected: for each cell, the proportion of genes that are not detected
+## mean: the mean UMI count for the gene across all cells
+sce.filtered <- addPerFeatureQC(sce.filtered, BPPARAM = bp.params)
+rowData(sce.filtered)
+
+# Calculate cell sparsity and gene sparsity
+colData(sce.filtered)$cell_sparsity <- 1 - (colData(sce.filtered)$detected / nrow(sce.filtered))
+rowData(sce.filtered)$gene_sparsity <- (100 - rowData(sce.filtered)$detected) / 100
+
+# Visualization cell sparsity and gene sparsity
+hist(sce.filtered$cell_sparsity, breaks=50, col="grey80", xlab="Cell sparsity", main="")
+hist(rowData(sce.filtered)$gene_sparsity, breaks=50, col="grey80", xlab="Gene sparsity", main="")
+```
+
+### Filtered by sparsity
+In the analysis, all of cells sparsity are lower than 0.99.
+
+Genes detected in a few cells only are unlikely to be informative and would hinder normalization. Genes that are expressed in fewer than 20 cells will be removed.
+
+```{r}
+sparse.cells <- sce.filtered$cell_sparsity > 0.99
+
+min.cells <- 1 - (20 / ncol(sce.filtered))
+sparse.genes <- rowData(sce.filtered)$gene_sparsity > min.cells
+table(sparse.genes)
+
+sce.final <- sce.filtered[!sparse.genes,]
+# saveRDS(sce, file = paste0(this.path, "/SCE_original.RDS"))
+# saveRDS(sce.filtered, file = paste0(this.path, "/SCE_filtered_cellQC_3MAD.RDS"))
+# saveRDS(sce.final, file = paste0(this.path, "/SCE_filtered_cellQC_3MAD_featureQC_above20cells.RDS"))
+```
+
+## Report system and packages
+```{r}
+report(sessionInfo())
+```
+

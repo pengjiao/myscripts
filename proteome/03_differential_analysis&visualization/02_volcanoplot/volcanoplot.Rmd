@@ -1,0 +1,101 @@
+---
+title: "volcanoplot"
+author: ""
+date: "2021/11/1"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## library
+```{r}
+library(EnhancedVolcano)
+library(readxl)
+```
+
+## data
+```{r}
+load("../../../../sixhosp_young_scs_aged/input/proteomics_input/SixHosp_NC_SCS1_Young_145subjects_proteomics_missing50Percent_logRatio_meta.RData")
+
+meta_df$Gender[meta_df$Gender == "female"] <- 2
+meta_df$Gender[meta_df$Gender == "male"] <- 1
+meta_df <- data.frame(meta_df)
+
+diff_input <- read_excel("../01_tables/linear_regression_age_table.xlsx")
+res <- diff_input
+```
+
+## valcano
+```{r}
+pdf("volcanoplot_linear_regression_coff001_fdr005.pdf", width = 7, height = 9)
+  EnhancedVolcano(res,
+    lab = res$features,
+    x = 'Coefficient',
+    y = 'fdr',
+    pCutoff = 0.05,
+    FCcutoff = 0.01,
+    xlim = c(-0.04, 0.04),
+    ylim = c(0, 20),
+    xlab = "Coefficient",
+    ylab = "-log(FDR)",
+    labSize = 4.0,
+    legendLabSize = 8,
+  legendIconSize = 5,
+    legendLabels = c("NS", "Coefficient", "FDR", "FDR and Coefficient"))
+  dev.off()
+  
+  pdf("volcanoplot_linear_regression_coff0_fdr005.pdf", width = 7, height = 9)
+  EnhancedVolcano(res,
+    lab = res$features,
+    x = 'Coefficient',
+    y = 'fdr',
+    pCutoff = 0.05,
+    FCcutoff = 0,
+    xlim = c(-0.04, 0.04),
+    ylim = c(0, 20),
+    xlab = "Coefficient",
+    ylab = "-log(FDR)",
+    labSize = 4.0,
+    legendLabSize = 8,
+  legendIconSize = 5,
+    legendLabels = c("NS", "Coefficient", "FDR", "FDR and Coefficient"))
+  dev.off()
+  
+  
+  pdf("volcanoplot_linear_regression_coff001_fdr001.pdf", width = 7, height = 9)
+  EnhancedVolcano(res,
+    lab = res$features,
+    x = 'Coefficient',
+    y = 'fdr',
+    pCutoff = 0.01,
+    FCcutoff = 0.01,
+    xlim = c(-0.04, 0.04),
+    ylim = c(0, 20),
+    xlab = "Coefficient",
+    ylab = "-log(FDR)",
+    labSize = 4.0,
+    legendLabSize = 8,
+  legendIconSize = 5,
+    legendLabels = c("NS", "Coefficient", "FDR", "FDR and Coefficient"))
+  dev.off()
+  
+  pdf("volcanoplot_linear_regression_coff0_fdr001.pdf", width = 7, height = 9)
+  EnhancedVolcano(res,
+    lab = res$features,
+    x = 'Coefficient',
+    y = 'fdr',
+    pCutoff = 0.01,
+    FCcutoff = 0,
+    xlim = c(-0.04, 0.04),
+    ylim = c(0, 20),
+    xlab = "Coefficient",
+    ylab = "-log(FDR)",
+    labSize = 4.0,
+    legendLabSize = 8,
+  legendIconSize = 5,
+    legendLabels = c("NS", "Coefficient", "FDR", "FDR and Coefficient"))
+  dev.off()
+```
+

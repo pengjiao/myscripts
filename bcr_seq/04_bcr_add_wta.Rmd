@@ -1,0 +1,688 @@
+---
+title: "04_bcr_add_wta"
+author: ""
+date: "2024-01-09"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Load library
+```{r}
+library(airr)
+library(stringr)
+library(UpSetR)
+library(dplyr)
+library(ComplexHeatmap)
+library(ggpubr)
+library(patchwork)
+library(cowplot)
+library(scatterpie)
+library(tidyr)
+library(PieGlyph)
+
+```
+
+## BCR data
+```{r}
+data_dir <- "/media/jmbiologics/sdd8T/scRNAseq_results"
+meta.info <- data.frame(SampleID=c("ConPB", "G73", "Ag2302", "B2302", "p2302"),
+                        SampleType=c("PanB", "PanB", "Agpos", "PanB", "PlasmaB"),
+                        SampleSource=c("Control", "DNAImmune", "PrImmune", "PrImmune", "PrImmune"),
+                        SampleGroup=c("ControlPanB", "DNAPanB", "PrAgPos", "PrPanB", "PrPlasmaB"))
+file_dir <- list.dirs(data_dir, recursive = F)
+
+#bcr.1x <- read.table("/media/jmbiologics/sdd8T/scRNAseq_results/Ag2302_JZsc2331_JZsc2332_B/JZsc2331_VDJ_perCell.csv", sep = ",")
+
+airr.input.list <- list()
+airr.heavy.list <- list()
+airr.light.list <- list()
+for (i in meta.info$SampleID) {
+   airr.input <- read_rearrangement(paste0(file_dir[grepl(i, file_dir)], "/Dominant_airr_rearrangement.tsv"))
+   airr.input.list[[i]] <- airr.input
+   
+   airr.h <- airr.input[airr.input$locus == "IGH",]
+   airr.l <- airr.input[airr.input$locus != "IGH",]
+   int.cells <- intersect(airr.h$cell_id, airr.l$cell_id)
+   airr.hdf <- airr.h[match(int.cells, airr.h$cell_id),]
+   airr.ldf <- airr.l[match(int.cells, airr.l$cell_id),]
+   airr.heavy.list[[i]] <- airr.hdf
+   airr.light.list[[i]] <- airr.ldf
+}
+seu.all <- readRDS("../results/All_SeuratObject_annotated_new.RDS.RDS")
+seu.all$cell_id <- str_split(names(seu.all$orig.ident), "_", simplify = T)[,2]
+```
+
+
+## Frequency
+```{r}
+cdr3_freq <- list()
+for (i in meta.info$SampleID) {
+  cdr3_freq[[i]] <- data.frame(table(airr.heavy.list[[i]]$cdr3_aa)) %>%
+    arrange(desc(Freq))
+}
+
+lt <- list(ControlPanB = cdr3_freq$ConPB$Var1,
+           DNAPanB = cdr3_freq$G73$Var1,
+           PrAgPos = cdr3_freq$Ag2302$Var1,
+           PrPanB = cdr3_freq$B2302$Var1,
+           PrPlasmaB = cdr3_freq$p2302$Var1)
+#m <- make_comb_mat(lt)
+m <-  make_comb_mat(lt[-2])
+m1 <- m[comb_size(m) < 500]
+UpSet(m1,
+      set_order = c("ControlPanB", "PrPanB", "PrPlasmaB", "PrAgPos"), 
+      #comb_order = order(comb_size(m1)),
+      top_annotation = upset_top_annotation(m1, add_numbers = TRUE),
+      right_annotation = upset_right_annotation(m1, add_numbers = TRUE))
+
+
+UpSet(m,
+      set_order = c("ControlPanB", "DNAPanB","PrPanB", "PrPlasmaB", "PrAgPos"), 
+      #comb_order = order(comb_size(m1)),
+      top_annotation = upset_top_annotation(m, add_numbers = TRUE),
+      right_annotation = upset_right_annotation(m, add_numbers = TRUE))
+
+
+library(ggvenn)
+ggvenn(
+  lt[-2], 
+  #fill_color = c("#0073C2FF", "#EFC000FF", "#868686FF", "#CD534CFF"),
+  stroke_size = 0.5, set_name_size = 4
+  )
+```
+
+## bcr frequency and common sets
+```{r}
+wta.meta <- seu.all@meta.data
+wta.meta$cell_id <- str_split(rownames(wta.meta), "_", simplify = T)[,2]
+wta.bcr <- list()
+wta.bcr.l <- list()
+seu.sel.list <- list()
+for (i in meta.info$SampleID) {
+  wta.info <- wta.meta[wta.meta$group == i,]
+  wta.sel <- merge(wta.info, airr.heavy.list[[i]], by="cell_id",)
+  seu.sel.list[[i]] <- seu.all[,seu.all$group == i & seu.all$cell_id %in% wta.sel$cell_id]
+  wta.bcr[[i]] <- wta.sel[match(seu.sel.list[[i]]$cell_id, wta.sel$cell_id),]
+  wta.bcr.l[[i]] <- airr.light.list[[i]][match(wta.bcr[[i]]$cell_id, airr.light.list[[i]]$cell_id),]
+  wta.bcr[[i]]$cdr1_aa_l <- wta.bcr.l[[i]]$cdr1_aa
+  wta.bcr[[i]]$cdr2_aa_l <- wta.bcr.l[[i]]$cdr2_aa
+  wta.bcr[[i]]$cdr3_aa_l <- wta.bcr.l[[i]]$cdr3_aa
+  wta.bcr[[i]]$sequence_alignment_aa_l <- wta.bcr.l[[i]]$sequence_alignment_aa
+
+
+}
+
+all.df <- do.call(rbind, wta.bcr)
+cdr3.group <- data.frame(table(all.df$cdr3_aa, all.df$Group))
+cdr3.group$Freq[cdr3.group$Freq == 0] <- NA
+
+sel.id <- NULL
+for (i in meta.info$SampleID) {
+  sel.id <- c(sel.id, seu.sel.list[[i]]$cell_id)
+}
+seu.sel <- seu.all[,names(seu.all$cell_id) %in% names(sel.id)]
+all.df$id_names <- paste0(all.df$Group, "_", all.df$cell_id)
+meta.sel <- all.df[match(names(seu.sel$cell_id), all.df$id_names),]
+rownames(meta.sel) <- paste0(meta.sel$Group, "_", meta.sel$cell_id)
+seu.sel@meta.data <- meta.sel
+saveRDS(seu.sel, file = "../results/All_SeuratObject_annotated_new_BCR.RDS")
+#ss <- wta.bcr$Ag2302[wta.bcr$Ag2302$cdr3_aa == "TRGDGWYYFDD",]
+#cdr3_freq$Ag2302$Var1[cdr3_freq$Ag2302$Freq > 1]
+```
+
+## AgPos
+```{r}
+cdr3.sel <- cdr3.group[cdr3.group$Var1 %in% cdr3_freq$Ag2302$Var1[1:20],]
+cdr3.sel$Var1 <- factor(cdr3.sel$Var1, levels = cdr3_freq$Ag2302$Var1[20:1])
+ggplot(data=cdr3.sel, 
+       aes(x=Var2, y=Var1, colour=Freq)) + 
+  geom_point(aes(size = Freq)) +
+  geom_text(aes(label = Freq), 
+            colour = "black", 
+            size = 3) +
+  scale_size_continuous(range = c(1, 15)) +
+  scale_color_continuous(low="white", high="red") +
+  scale_fill_continuous(low="white", high="red") +
+  theme_bw() +
+  theme(axis.title = element_blank(),
+        legend.position = "none")
+
+
+cdr3.group <- data.frame(table(all.df$cdr3_aa, all.df$Group))
+cdr3.group$Freq[cdr3.group$Freq == 0] <- NA
+cdr3.sel <- cdr3.group[cdr3.group$Var1 %in% cdr3_freq$Ag2302$Var1[21:40],]
+cdr3.sel$Var1 <- factor(cdr3.sel$Var1, levels = cdr3_freq$Ag2302$Var1[40:21])
+ggplot(data=cdr3.sel, 
+       aes(x=Var2, y=Var1, colour=Freq)) + 
+  geom_point(aes(size = Freq)) +
+  geom_text(aes(label = Freq), 
+            colour = "black", 
+            size = 3) +
+  scale_size_continuous(range = c(1, 15)) +
+  scale_color_continuous(low="white", high="red") +
+  scale_fill_continuous(low="white", high="red") +
+  theme_bw() +
+  theme(axis.title = element_blank(),
+        legend.position = "none")
+
+
+cdr3.group <- data.frame(table(all.df$cdr3_aa, all.df$Group))
+cdr3.group$Freq[cdr3.group$Freq == 0] <- NA
+cdr3.sel <- cdr3.group[cdr3.group$Var1 %in% cdr3_freq$Ag2302$Var1[41:60],]
+cdr3.sel$Var1 <- factor(cdr3.sel$Var1, levels = cdr3_freq$Ag2302$Var1[60:41])
+ggplot(data=cdr3.sel, 
+       aes(x=Var2, y=Var1, colour=Freq)) + 
+  geom_point(aes(size = Freq)) +
+  geom_text(aes(label = Freq), 
+            colour = "black", 
+            size = 3) +
+  scale_size_continuous(range = c(1, 15)) +
+  scale_color_continuous(low="white", high="red") +
+  scale_fill_continuous(low="white", high="red") +
+  theme_bw() +
+  theme(axis.title = element_blank(),
+        legend.position = "none")
+
+
+### scatter pie chart
+fre.list <- list()
+for (i in meta.info$SampleID) {
+  sel.df <- all.df[all.df$group == i,]
+  fre.list[[i]] <- data.frame(table(sel.df$cdr3_aa, sel.df$type))
+  fre.list[[i]]$Group <- unique(sel.df$Group)
+}
+fre.df <- do.call(rbind, fre.list)
+fre.wide <- pivot_wider(fre.df, names_from = Var2, values_from = Freq)
+
+
+fre.sel <- fre.wide[fre.wide$Var1 %in% cdr3_freq$Ag2302$Var1[1:20],]
+fre.sel$Var1 <- factor(fre.sel$Var1, levels = cdr3_freq$Ag2302$Var1[20:1])
+ggplot()+
+  geom_pie_glyph(aes(x=Group, y=Var1),
+                 slices = unique(fre.df$Var2),
+                 data = fre.sel,
+                 radius = 0.4)+
+  theme_bw() +
+  theme(axis.title = element_blank())
+
+
+fre.sel <- fre.wide[fre.wide$Var1 %in% cdr3_freq$Ag2302$Var1[21:40],]
+fre.sel$Var1 <- factor(fre.sel$Var1, levels = cdr3_freq$Ag2302$Var1[40:21])
+ggplot()+
+  geom_pie_glyph(aes(x=Group, y=Var1),
+                 slices = unique(fre.df$Var2),
+                 data = fre.sel,
+                 radius = 0.4)+
+  theme_bw() +
+  theme(axis.title = element_blank())
+
+
+fre.sel <- fre.wide[fre.wide$Var1 %in% cdr3_freq$Ag2302$Var1[41:60],]
+fre.sel$Var1 <- factor(fre.sel$Var1, levels = cdr3_freq$Ag2302$Var1[60:41])
+ggplot()+
+  geom_pie_glyph(aes(x=Group, y=Var1),
+                 slices = unique(fre.df$Var2),
+                 data = fre.sel,
+                 radius = 0.4)+
+  theme_bw() +
+  theme(axis.title = element_blank())
+
+```
+
+
+
+### pragpos top60 bcr cell type
+```{r}
+## combine wta and bcr
+all(all.df$cell_id == wta.meta$cell_id)
+seu.all@meta.data <- wta.meta
+seu.list <- list()
+for (i in meta.info$SampleID) {
+  seu.single <- seu.all[,seu.all$group == i]
+  intid <- intersect(seu.single$cell_id, wta.bcr[[i]]$cell_id)
+  seu.single <- seu.single[,seu.single$cell_id %in% intid]
+  meta.new <- wta.bcr[[i]][match(seu.single$cell_id, wta.bcr[[i]]$cell_id),]
+  rownames(meta.new) <- rownames(seu.single@meta.data)
+  if(all(seu.single$cell_id == meta.new$cell_id)){
+    seu.single@meta.data <- meta.new
+  }
+  seu.list[[i]] <- seu.single
+}
+
+DimPlot(seu.list$Ag2302, 
+        reduction = "umap", 
+        group.by = "type", 
+        pt.size = 2,
+        label = TRUE, label.size = 4, repel = TRUE)
+
+
+top.p <- list()
+for (i in 1:10) {
+  seu.list$Ag2302$cdr3_top <- ifelse(seu.list$Ag2302$cdr3_aa==cdr3_freq$Ag2302$Var1[i], as.character(cdr3_freq$Ag2302$Var1[i]), NA)
+  p1 <- DimPlot(seu.list$Ag2302, 
+        reduction = "umap", 
+        group.by = "cdr3_top", 
+        cols = "red", alpha = 0.7, 
+        na.value = "grey80", pt.size = 2) + 
+    ggtitle(cdr3_freq$Ag2302$Var1[i]) +
+    NoLegend()
+  
+  top.freq <- data.frame(table(seu.list$Ag2302$type[!is.na(seu.list$Ag2302$cdr3_top)])) %>%
+  arrange(desc(Freq))
+  
+  p2 <- ggbarplot(top.freq, x = "Var1", y = "Freq",
+                fill = "Var1",
+                #add = "mean_sd", add.params = list(group = "group"),
+                position = position_dodge(0.7),
+                label = F) +
+  coord_flip() +
+  geom_text(aes(label = Freq), position = position_dodge(0.7), hjust = -0.3) +  # 在条形图外添加文本
+  theme(axis.text.y = element_text(hjust = 0),
+        axis.title.y = element_blank(),
+        legend.position = "none",
+        axis.title = element_blank()) +
+  scale_y_continuous(expand = expansion(mult = c(0.1, 0.2)))
+  
+  top.p[[i]] <- plot_grid(p1, p2, nrow = 2, rel_heights = c(2,1))
+}
+
+
+```
+
+## Plasma
+```{r}
+cdr3.sel <- cdr3.group[cdr3.group$Var1 %in% cdr3_freq$p2302$Var1[1:20],]
+cdr3.sel$Var1 <- factor(cdr3.sel$Var1, levels = cdr3_freq$p2302$Var1[20:1])
+ggplot(data=cdr3.sel, 
+       aes(x=Var2, y=Var1, colour=Freq)) + 
+  geom_point(aes(size = Freq)) +
+  geom_text(aes(label = Freq), 
+            colour = "black", 
+            size = 3) +
+  scale_size_continuous(range = c(1, 15)) +
+  scale_color_continuous(low="white", high="red") +
+  scale_fill_continuous(low="white", high="red") +
+  theme_bw() +
+  theme(axis.title = element_blank(),
+        legend.position = "none")
+
+
+cdr3.sel <- cdr3.group[cdr3.group$Var1 %in% cdr3_freq$p2302$Var1[21:40],]
+cdr3.sel$Var1 <- factor(cdr3.sel$Var1, levels = cdr3_freq$p2302$Var1[40:21])
+ggplot(data=cdr3.sel, 
+       aes(x=Var2, y=Var1, colour=Freq)) + 
+  geom_point(aes(size = Freq)) +
+  geom_text(aes(label = Freq), 
+            colour = "black", 
+            size = 3) +
+  scale_size_continuous(range = c(1, 15)) +
+  scale_color_continuous(low="white", high="red") +
+  scale_fill_continuous(low="white", high="red") +
+  theme_bw() +
+  theme(axis.title = element_blank(),
+        legend.position = "none")
+
+cdr3.sel <- cdr3.group[cdr3.group$Var1 %in% cdr3_freq$p2302$Var1[41:60],]
+cdr3.sel$Var1 <- factor(cdr3.sel$Var1, levels = cdr3_freq$p2302$Var1[60:41])
+ggplot(data=cdr3.sel, 
+       aes(x=Var2, y=Var1, colour=Freq)) + 
+  geom_point(aes(size = Freq)) +
+  geom_text(aes(label = Freq), 
+            colour = "black", 
+            size = 3) +
+  scale_size_continuous(range = c(1, 15)) +
+  scale_color_continuous(low="white", high="red") +
+  scale_fill_continuous(low="white", high="red") +
+  theme_bw() +
+  theme(axis.title = element_blank(),
+        legend.position = "none")
+
+
+### scatter pie chart
+
+
+fre.sel <- fre.wide[fre.wide$Var1 %in% cdr3_freq$p2302$Var1[1:20],]
+fre.sel$Var1 <- factor(fre.sel$Var1, levels = cdr3_freq$p2302$Var1[20:1])
+ggplot()+
+  geom_pie_glyph(aes(x=Group, y=Var1),
+                 slices = unique(fre.df$Var2),
+                 data = fre.sel,
+                 radius = 0.4)+
+  theme_bw() +
+  theme(axis.title = element_blank())
+
+
+fre.sel <- fre.wide[fre.wide$Var1 %in% cdr3_freq$p2302$Var1[21:40],]
+fre.sel$Var1 <- factor(fre.sel$Var1, levels = cdr3_freq$p2302$Var1[40:21])
+ggplot()+
+  geom_pie_glyph(aes(x=Group, y=Var1),
+                 slices = unique(fre.df$Var2),
+                 data = fre.sel,
+                 radius = 0.4)+
+  theme_bw() +
+  theme(axis.title = element_blank())
+
+
+fre.sel <- fre.wide[fre.wide$Var1 %in% cdr3_freq$p2302$Var1[41:60],]
+fre.sel$Var1 <- factor(fre.sel$Var1, levels = cdr3_freq$p2302$Var1[60:41])
+ggplot()+
+  geom_pie_glyph(aes(x=Group, y=Var1),
+                 slices = unique(fre.df$Var2),
+                 data = fre.sel,
+                 radius = 0.4)+
+  theme_bw() +
+  theme(axis.title = element_blank())
+
+```
+
+
+## Bulk BCR
+
+```{r}
+cont.input <- read_rearrangement("../../bulkbcr_seq/annotation_changeo/ConPB_airr_igblast.tsv")
+cont.input <- cont.input[!is.na(cont.input$cdr3_aa),]
+cont.cdr3 <- data.frame(table(cont.input$cdr3_aa))
+cont.cdr.df <- data.frame(cont.cdr3[,1], "ControlPBbulk", cont.cdr3[,2])
+colnames(cont.cdr.df) <- colnames(cdr3.group)
+
+pan.input <- read_rearrangement("../../bulkbcr_seq/annotation_changeo/B2302_airr_igblast.tsv")
+pan.input <- pan.input[!is.na(pan.input$cdr3_aa),]
+pan.cdr3 <- data.frame(table(pan.input$cdr3_aa))
+pan.cdr.df <- data.frame(pan.cdr3[,1], "PrPanBbulk", pan.cdr3[,2])
+colnames(pan.cdr.df) <- colnames(cdr3.group)
+
+pand.input <- read_rearrangement("../../bulkbcr_seq/annotation_changeo/G73_airr_igblast.tsv")
+pand.input <- pand.input[!is.na(pand.input$cdr3_aa),]
+pand.cdr3 <- data.frame(table(pand.input$cdr3_aa))
+pand.cdr.df <- data.frame(pand.cdr3[,1], "DNAPanBbulk", pand.cdr3[,2])
+colnames(pand.cdr.df) <- colnames(cdr3.group)
+
+
+
+
+cdr3.group.bulk <- rbind(cont.cdr.df,pan.cdr.df, pand.cdr.df, cdr3.group)
+openxlsx::write.xlsx(cdr3.group.bulk,file = "../results/cdr3_seq.xlsx")
+
+
+
+cdr3.sel <- cdr3.group.bulk[cdr3.group.bulk$Var1 %in% cdr3_freq$Ag2302$Var1[1:20],]
+cdr3.sel$Var1 <- factor(cdr3.sel$Var1, levels = cdr3_freq$Ag2302$Var1[20:1])
+ggplot(data=cdr3.sel, 
+       aes(x=Var2, y=Var1, colour=Freq)) + 
+  geom_point(aes(size = Freq)) +
+  geom_text(aes(label = Freq), 
+            colour = "black", 
+            size = 3) +
+  scale_size_continuous(range = c(1, 15)) +
+  scale_color_continuous(low="white", high="red") +
+  scale_fill_continuous(low="white", high="red") +
+  theme_bw() +
+  theme(axis.title = element_blank(),
+        legend.position = "none")
+
+
+cdr3.sel <- cdr3.group.bulk[cdr3.group.bulk$Var1 %in% cdr3_freq$Ag2302$Var1[21:40],]
+cdr3.sel$Var1 <- factor(cdr3.sel$Var1, levels = cdr3_freq$Ag2302$Var1[21:40])
+ggplot(data=cdr3.sel, 
+       aes(x=Var2, y=Var1, colour=Freq)) + 
+  geom_point(aes(size = Freq)) +
+  geom_text(aes(label = Freq), 
+            colour = "black", 
+            size = 3) +
+  scale_size_continuous(range = c(1, 15)) +
+  scale_color_continuous(low="white", high="red") +
+  scale_fill_continuous(low="white", high="red") +
+  theme_bw() +
+  theme(axis.title = element_blank(),
+        legend.position = "none")
+
+
+cdr3.sel <- cdr3.group.bulk[cdr3.group.bulk$Var1 %in% cdr3_freq$Ag2302$Var1[41:60],]
+cdr3.sel$Var1 <- factor(cdr3.sel$Var1, levels = cdr3_freq$Ag2302$Var1[41:60])
+ggplot(data=cdr3.sel, 
+       aes(x=Var2, y=Var1, colour=Freq)) + 
+  geom_point(aes(size = Freq)) +
+  geom_text(aes(label = Freq), 
+            colour = "black", 
+            size = 3) +
+  scale_size_continuous(range = c(1, 15)) +
+  scale_color_continuous(low="white", high="red") +
+  scale_fill_continuous(low="white", high="red") +
+  theme_bw() +
+  theme(axis.title = element_blank(),
+        legend.position = "none")
+```
+
+
+```{r}
+cdr3.combine <- read_excel("../results/cdr3_allprojects_sequence_frequency.xlsx")
+cdr3.sel <- cdr3.combine[cdr3.combine$Var1 %in% cdr3_freq$Ag2302$Var1[1:20],]
+cdr3.sel$Var1 <- factor(cdr3.sel$Var1, levels = cdr3_freq$Ag2302$Var1[20:1])
+cdr3.sel$Var2 <- factor(cdr3.sel$Var2, levels = c("muc16_single", "muc16_bulk", "his", "his_bulk", "hfc", "hfc_bulk", "mfc", "mfc_bulk", "ControlPanB", "ControlPBbulk", "DNAPanB","DNAPanBbulk", "PrAgPos", "PrPanB", "PrPanBbulk", "PrPlasmaB"))
+ggplot(data=cdr3.sel, 
+       aes(x=Var2, y=Var1, colour=Freq)) + 
+  geom_point(aes(size = Freq)) +
+  geom_text(aes(label = Freq), 
+            colour = "black", 
+            size = 3) +
+  scale_size_continuous(range = c(1, 15)) +
+  scale_color_continuous(low="white", high="red") +
+  scale_fill_continuous(low="white", high="red") +
+  theme_bw() +
+  theme(axis.title = element_blank(),
+        legend.position = "none")
+
+
+cdr3.sel <- cdr3.combine[cdr3.combine$Var1 %in% cdr3_freq$Ag2302$Var1[21:40],]
+cdr3.sel$Var1 <- factor(cdr3.sel$Var1, levels = cdr3_freq$Ag2302$Var1[40:21])
+cdr3.sel$Var2 <- factor(cdr3.sel$Var2, levels = c("muc16_single", "muc16_bulk", "his", "his_bulk", "hfc", "hfc_bulk", "mfc", "mfc_bulk", "ControlPanB", "ControlPBbulk", "DNAPanB","DNAPanBbulk", "PrAgPos", "PrPanB", "PrPanBbulk", "PrPlasmaB"))
+ggplot(data=cdr3.sel, 
+       aes(x=Var2, y=Var1, colour=Freq)) + 
+  geom_point(aes(size = Freq)) +
+  geom_text(aes(label = Freq), 
+            colour = "black", 
+            size = 3) +
+  scale_size_continuous(range = c(1, 15)) +
+  scale_color_continuous(low="white", high="red") +
+  scale_fill_continuous(low="white", high="red") +
+  theme_bw() +
+  theme(axis.title = element_blank(),
+        legend.position = "none")
+
+
+cdr3.sel <- cdr3.combine[cdr3.combine$Var1 %in% cdr3_freq$Ag2302$Var1[41:60],]
+cdr3.sel$Var1 <- factor(cdr3.sel$Var1, levels = cdr3_freq$Ag2302$Var1[41:60])
+cdr3.sel$Var2 <- factor(cdr3.sel$Var2, levels = c("muc16_single", "muc16_bulk", "his", "his_bulk", "hfc", "hfc_bulk", "mfc", "mfc_bulk", "ControlPanB", "ControlPBbulk", "DNAPanB","DNAPanBbulk", "PrAgPos", "PrPanB", "PrPanBbulk", "PrPlasmaB"))
+ggplot(data=cdr3.sel, 
+       aes(x=Var2, y=Var1, colour=Freq)) + 
+  geom_point(aes(size = Freq)) +
+  geom_text(aes(label = Freq), 
+            colour = "black", 
+            size = 3) +
+  scale_size_continuous(range = c(1, 15)) +
+  scale_color_continuous(low="white", high="red") +
+  scale_fill_continuous(low="white", high="red") +
+  theme_bw() +
+  theme(axis.title = element_blank(),
+        legend.position = "none")
+```
+
+```{r}
+cdr3.sel <- cdr3.combine[cdr3.combine$Var1 %in% cdr3_freq$p2302$Var1[1:20],]
+cdr3.sel$Var1 <- factor(cdr3.sel$Var1, levels = cdr3_freq$p2302$Var1[20:1])
+cdr3.sel$Var2 <- factor(cdr3.sel$Var2, levels = c("muc16_single", "muc16_bulk", "his", "his_bulk", "hfc", "hfc_bulk", "mfc", "mfc_bulk", "ControlPanB", "ControlPBbulk", "DNAPanB","DNAPanBbulk", "PrAgPos", "PrPanB", "PrPanBbulk", "PrPlasmaB"))
+ggplot(data=cdr3.sel, 
+       aes(x=Var2, y=Var1, colour=Freq)) + 
+  geom_point(aes(size = Freq)) +
+  geom_text(aes(label = Freq), 
+            colour = "black", 
+            size = 3) +
+  scale_size_continuous(range = c(1, 15)) +
+  scale_color_continuous(low="white", high="red") +
+  scale_fill_continuous(low="white", high="red") +
+  theme_bw() +
+  theme(axis.title = element_blank(),
+        legend.position = "none")
+
+
+cdr3.sel <- cdr3.combine[cdr3.combine$Var1 %in% cdr3_freq$p2302$Var1[21:40],]
+cdr3.sel$Var1 <- factor(cdr3.sel$Var1, levels = cdr3_freq$p2302$Var1[40:21])
+cdr3.sel$Var2 <- factor(cdr3.sel$Var2, levels = c("muc16_single", "muc16_bulk", "his", "his_bulk", "hfc", "hfc_bulk", "mfc", "mfc_bulk", "ControlPanB", "ControlPBbulk", "DNAPanB","DNAPanBbulk", "PrAgPos", "PrPanB", "PrPanBbulk", "PrPlasmaB"))
+ggplot(data=cdr3.sel, 
+       aes(x=Var2, y=Var1, colour=Freq)) + 
+  geom_point(aes(size = Freq)) +
+  geom_text(aes(label = Freq), 
+            colour = "black", 
+            size = 3) +
+  scale_size_continuous(range = c(1, 15)) +
+  scale_color_continuous(low="white", high="red") +
+  scale_fill_continuous(low="white", high="red") +
+  theme_bw() +
+  theme(axis.title = element_blank(),
+        legend.position = "none")
+
+
+cdr3.sel <- cdr3.combine[cdr3.combine$Var1 %in% cdr3_freq$p2302$Var1[41:60],]
+cdr3.sel$Var1 <- factor(cdr3.sel$Var1, levels = cdr3_freq$p2302$Var1[41:60])
+cdr3.sel$Var2 <- factor(cdr3.sel$Var2, levels = c("muc16_single", "muc16_bulk", "his", "his_bulk", "hfc", "hfc_bulk", "mfc", "mfc_bulk", "ControlPanB", "ControlPBbulk", "DNAPanB","DNAPanBbulk", "PrAgPos", "PrPanB", "PrPanBbulk", "PrPlasmaB"))
+ggplot(data=cdr3.sel, 
+       aes(x=Var2, y=Var1, colour=Freq)) + 
+  geom_point(aes(size = Freq)) +
+  geom_text(aes(label = Freq), 
+            colour = "black", 
+            size = 3) +
+  scale_size_continuous(range = c(1, 15)) +
+  scale_color_continuous(low="white", high="red") +
+  scale_fill_continuous(low="white", high="red") +
+  theme_bw() +
+  theme(axis.title = element_blank(),
+        legend.position = "none")
+```
+
+
+
+
+
+```{r}
+cdr3.sel <- cdr3.group.bulk[cdr3.group.bulk$Var1 %in% cdr3_freq$p2302$Var1[1:20],]
+cdr3.sel$Var1 <- factor(cdr3.sel$Var1, levels = cdr3_freq$p2302$Var1[20:1])
+ggplot(data=cdr3.sel, 
+       aes(x=Var2, y=Var1, colour=Freq)) + 
+  geom_point(aes(size = Freq)) +
+  geom_text(aes(label = Freq), 
+            colour = "black", 
+            size = 3) +
+  scale_size_continuous(range = c(1, 15)) +
+  scale_color_continuous(low="white", high="red") +
+  scale_fill_continuous(low="white", high="red") +
+  theme_bw() +
+  theme(axis.title = element_blank(),
+        legend.position = "none")
+
+
+cdr3.sel <- cdr3.group.bulk[cdr3.group.bulk$Var1 %in% cdr3_freq$p2302$Var1[21:40],]
+cdr3.sel$Var1 <- factor(cdr3.sel$Var1, levels = cdr3_freq$p2302$Var1[21:40])
+ggplot(data=cdr3.sel, 
+       aes(x=Var2, y=Var1, colour=Freq)) + 
+  geom_point(aes(size = Freq)) +
+  geom_text(aes(label = Freq), 
+            colour = "black", 
+            size = 3) +
+  scale_size_continuous(range = c(1, 15)) +
+  scale_color_continuous(low="white", high="red") +
+  scale_fill_continuous(low="white", high="red") +
+  theme_bw() +
+  theme(axis.title = element_blank(),
+        legend.position = "none")
+
+
+cdr3.sel <- cdr3.group.bulk[cdr3.group.bulk$Var1 %in% cdr3_freq$p2302$Var1[41:60],]
+cdr3.sel$Var1 <- factor(cdr3.sel$Var1, levels = cdr3_freq$p2302$Var1[41:60])
+ggplot(data=cdr3.sel, 
+       aes(x=Var2, y=Var1, colour=Freq)) + 
+  geom_point(aes(size = Freq)) +
+  geom_text(aes(label = Freq), 
+            colour = "black", 
+            size = 3) +
+  scale_size_continuous(range = c(1, 15)) +
+  scale_color_continuous(low="white", high="red") +
+  scale_fill_continuous(low="white", high="red") +
+  theme_bw() +
+  theme(axis.title = element_blank(),
+        legend.position = "none")
+```
+
+
+
+
+```{r}
+cont.input <- read_rearrangement("../../bulkbcr_seq/annotation_changeo/ConPB_airr_igblast.tsv")
+cont.input <- cont.input[!is.na(cont.input$cdr3_aa),]
+cont.cdr3 <- data.frame(table(cont.input$cdr3_aa))
+
+library(ggvenn)
+x <- list(sc_control = cdr3_freq$ConPB$Var1,
+          bulk_control = cont.cdr3$Var1)
+ggvenn(
+  x, 
+  stroke_size = 0.5, set_name_size = 4
+  )
+
+x <- list(sc_control = cdr3_freq$B2302$Var1,
+          bulk_control = cont.cdr3$Var1)
+ggvenn(
+  x, 
+  stroke_size = 0.5, set_name_size = 4
+  )
+
+
+x <- list(sc_control = cdr3_freq$p2302$Var1,
+          bulk_control = cont.cdr3$Var1)
+ggvenn(
+  x, 
+  stroke_size = 0.5, set_name_size = 4
+  )
+
+
+
+################
+cont.input <- read_rearrangement("../../bulkbcr_seq/annotation_changeo/G73_airr_igblast.tsv")
+cont.input <- cont.input[!is.na(cont.input$cdr3_aa),]
+cont.cdr3 <- data.frame(table(cont.input$cdr3_aa))
+
+library(ggvenn)
+x <- list(sc_control = cdr3_freq$ConPB$Var1,
+          bulk_control = cont.cdr3$Var1)
+ggvenn(
+  x, 
+  stroke_size = 0.5, set_name_size = 4
+  )
+
+x <- list(sc_control = cdr3_freq$B2302$Var1,
+          bulk_control = cont.cdr3$Var1)
+ggvenn(
+  x, 
+  stroke_size = 0.5, set_name_size = 4
+  )
+
+
+x <- list(sc_control = cdr3_freq$p2302$Var1,
+          bulk_control = cont.cdr3$Var1)
+ggvenn(
+  x, 
+  stroke_size = 0.5, set_name_size = 4
+  )
+
+
+x <- list(sc_control = cdr3_freq$G73$Var1,
+          bulk_control = cont.cdr3$Var1)
+ggvenn(
+  x, 
+  stroke_size = 0.5, set_name_size = 4
+  )
+
+```
+

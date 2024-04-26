@@ -1,0 +1,246 @@
+---
+title: "xmwas_integration_network"
+author: ""
+date: ""
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## library
+```{r}
+library(xMWAS)
+library(microbiome)
+library(tibble)
+library(readr)
+library(dplyr)
+library(tidyr)
+```
+
+## data
+```{r}
+
+####### 3 omics
+load("~/project/nmo/211028/input/merge/NMO_nmo_control_meta_imm_cyo_meta_lc_fia.RData")
+id <- intersect(intersect(rownames(cytokine),rownames(immune)),rownames(metabolics_lc))
+
+cy <- data.frame(t(cytokine[id,-c(1:4)]))
+im <- data.frame(t(immune[id,-c(1:4)]))
+lc <- data.frame(t(metabolics_lc[id,-c(1:4)]))
+
+
+class_df <- data.frame(meta_all[id,"group"])
+class_df$SampleID <- id
+colnames(class_df) <- c( "Class","SampleID")
+class_df$Class <- factor(class_df$Class, levels = c("control", "nmo"))
+class_df <- class_df[,c(2,1)]
+```
+
+## xMWAS
+```{r}
+## parameters (absolute path needed)
+output.1 <- "xmwas/output_corr05_allfeatures"
+
+output.2 <- "xmwas/output_corr05_top20features"
+
+output.3 <- "xmwas/output_corr06_allfeatures"
+
+output.4 <- "xmwas/output_corr07_allfeatures"
+```
+
+## xWMAS
+
+### five groups together
+
+```{r}
+dir.create(output.1)
+run_xmwas(Xome_data=im,
+          Yome_data=cy,
+          Zome_data=lc,
+          outloc=output.1,
+          classlabels=class_df, class_fname=NA,
+          xmwasmethod="spls",
+          plsmode="canonical",
+          max_xvar=5000,
+          max_yvar=5000,
+          max_zvar=5000,
+          max_wvar=5000,
+          rsd.filt.thresh=1,
+          corthresh=0.5,
+          keepX=500,
+          keepY=500,
+          keepZ=500,
+          keepW=500,
+          pairedanalysis=FALSE,
+          optselect=TRUE,
+          rawPthresh=0.05,
+          numcomps=10,
+          net_edge_colors=c("blue","red"),
+          net_node_colors=c("orange","green","cyan"),
+                     Xname="Immune",Yname="Cytokine",
+                     Zname="Metabolite",
+                     net_node_shape=c("rectangle","circle","triangle"),
+                     all.missing.thresh=NA,
+                     seednum=100,
+                     label.cex=0.2,
+                     vertex.size=6,
+                     graphclustering=TRUE,
+                     interactive=FALSE,
+                     max_connections=10000,
+                     centrality_method="eigenvector",
+                     use.X.reference=FALSE,removeRda=TRUE,
+                     compare.classes=T, #compare classes: TRUE or FALSE
+                     class.comparison.allvar=TRUE,
+                     modularity.weighted=TRUE,
+                     globalcomparison=TRUE,
+                     plot.pairwise=T, #plot results for pairwise comparisons: TRUE or FALSE
+                     apply.sparse.class.comparison=T, 
+                     layout.type="fr1")
+suppressWarnings(try(sink(file=NULL),silent=TRUE))
+```
+
+
+```{r}
+dir.create(output.2)
+run_xmwas(Xome_data=immune,
+          Yome_data=ck,
+          Zome_data=metab,
+          outloc=output.2,
+          classlabels=class_df, class_fname=NA,
+          xmwasmethod="spls",
+          plsmode="canonical",
+          max_xvar=5000,
+          max_yvar=5000,
+          max_zvar=5000,
+          max_wvar=5000,
+          rsd.filt.thresh=1,
+          corthresh=0.5,
+          keepX=20,
+          keepY=20,
+          keepZ=20,
+          keepW=20,
+          pairedanalysis=FALSE,
+          optselect=TRUE,
+          rawPthresh=0.05,
+          numcomps=10,
+          net_edge_colors=c("blue","red"),
+          net_node_colors=c("orange","green","cyan"),
+                     Xname="Immune",Yname="Cytokine",
+                     Zname="Metabolite",
+                     net_node_shape=c("rectangle","circle","triangle"),
+                     all.missing.thresh=NA,
+                     seednum=100,
+                     label.cex=0.2,
+                     vertex.size=6,
+                     graphclustering=TRUE,
+                     interactive=FALSE,
+                     max_connections=10000,
+                     centrality_method="eigenvector",
+                     use.X.reference=FALSE,removeRda=TRUE,
+                     compare.classes=T, #compare classes: TRUE or FALSE
+                     class.comparison.allvar=TRUE,
+                     modularity.weighted=TRUE,
+                     globalcomparison=TRUE,
+                     plot.pairwise=T, #plot results for pairwise comparisons: TRUE or FALSE
+                     apply.sparse.class.comparison=T, 
+                     layout.type="fr1")
+suppressWarnings(try(sink(file=NULL),silent=TRUE))
+```
+
+
+```{r}
+dir.create(output.3)
+run_xmwas(Xome_data=immune,
+          Yome_data=ck,
+          Zome_data=metab,
+          outloc=output.3,
+          classlabels=class_df, class_fname=NA,
+          xmwasmethod="spls",
+          plsmode="canonical",
+          max_xvar=5000,
+          max_yvar=5000,
+          max_zvar=5000,
+          max_wvar=5000,
+          rsd.filt.thresh=1,
+          corthresh=0.6,
+          keepX=500,
+          keepY=500,
+          keepZ=500,
+          keepW=500,
+          pairedanalysis=FALSE,
+          optselect=TRUE,
+          rawPthresh=0.05,
+          numcomps=10,
+          net_edge_colors=c("blue","red"),
+          net_node_colors=c("orange","green","cyan"),
+                     Xname="Immune",Yname="Cytokine",
+                     Zname="Metabolite",
+                     net_node_shape=c("rectangle","circle","triangle"),
+                     all.missing.thresh=NA,
+                     seednum=100,
+                     label.cex=0.2,
+                     vertex.size=6,
+                     graphclustering=TRUE,
+                     interactive=FALSE,
+                     max_connections=10000,
+                     centrality_method="eigenvector",
+                     use.X.reference=FALSE,removeRda=TRUE,
+                     compare.classes=T, #compare classes: TRUE or FALSE
+                     class.comparison.allvar=TRUE,
+                     modularity.weighted=TRUE,
+                     globalcomparison=TRUE,
+                     plot.pairwise=T, #plot results for pairwise comparisons: TRUE or FALSE
+                     apply.sparse.class.comparison=T, 
+                     layout.type="fr1")
+suppressWarnings(try(sink(file=NULL),silent=TRUE))
+```
+
+```{r}
+dir.create(output.4)
+run_xmwas(Xome_data=immune,
+          Yome_data=ck,
+          Zome_data=metab,
+          outloc=output.4,
+          classlabels=class_df, class_fname=NA,
+          xmwasmethod="spls",
+          plsmode="canonical",
+          max_xvar=5000,
+          max_yvar=5000,
+          max_zvar=5000,
+          max_wvar=5000,
+          rsd.filt.thresh=1,
+          corthresh=0.7,
+          keepX=500,
+          keepY=500,
+          keepZ=500,
+          keepW=500,
+          pairedanalysis=FALSE,
+          optselect=TRUE,
+          rawPthresh=0.05,
+          numcomps=10,
+          net_edge_colors=c("blue","red"),
+          net_node_colors=c("orange","green","cyan"),
+                     Xname="Immune",Yname="Cytokine",
+                     Zname="Metabolite",
+                     net_node_shape=c("rectangle","circle","triangle"),
+                     all.missing.thresh=NA,
+                     seednum=100,
+                     label.cex=0.2,
+                     vertex.size=6,
+                     graphclustering=TRUE,
+                     interactive=FALSE,
+                     max_connections=10000,
+                     centrality_method="eigenvector",
+                     use.X.reference=FALSE,removeRda=TRUE,
+                     compare.classes=T, #compare classes: TRUE or FALSE
+                     class.comparison.allvar=TRUE,
+                     modularity.weighted=TRUE,
+                     globalcomparison=TRUE,
+                     plot.pairwise=T, #plot results for pairwise comparisons: TRUE or FALSE
+                     apply.sparse.class.comparison=T, 
+                     layout.type="fr1")
+suppressWarnings(try(sink(file=NULL),silent=TRUE))
+```
+

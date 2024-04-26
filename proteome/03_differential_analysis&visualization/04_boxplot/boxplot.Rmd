@@ -1,0 +1,74 @@
+---
+title: "boxplot"
+author: ""
+date: "2021/11/2"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## library
+```{r}
+library(ggpubr)
+library(dplyr)
+library(readxl)
+```
+
+## data
+```{r}
+compare_list <- list(c("20-40", "40-60"),
+                     c("20-40", "60-80"),
+                     c("40-60", "60-80"))
+
+load("../../../../sixhosp_young_scs_aged/input/proteomics_input/SixHosp_NC_SCS1_Young_145subjects_proteomics_missing50Percent_logRatio_meta.RData")
+
+meta_df$Gender[meta_df$Gender == "female"] <- 2
+meta_df$Gender[meta_df$Gender == "male"] <- 1
+meta_df <- data.frame(meta_df)
+
+meta <- meta_df %>% 
+  select(sample_FACS, Age, Gender) %>%
+  mutate(
+    group = case_when(
+      Age > 20 & Age <= 40 ~ "20-40",
+      Age > 40 & Age <= 60 ~ "40-60",
+      Age > 60 & Age <= 80 ~ "60-80"
+    )
+  )
+diff_input <- read_excel("../01_linear_regression_table/linear_regression_age_table.xlsx")
+diff <- diff_input[diff_input$fdr < 0.05,]
+mat <- t(df[,diff$features])
+meta$group <- as.factor(meta$group)
+
+df_sel <- df[,diff$features]
+dat <- cbind(meta["group"], df_sel)
+```
+
+## boxplot
+```{r}
+palette = c("#00aba9", "#fa6800", "#647687")
+
+for (i in colnames(dat)[-1]) {
+  base <- ggplot(dat,
+                 aes_string(x = "group", y = i)) +
+    geom_violin(aes(colour = group, fill = group), trim = FALSE) +
+    geom_boxplot(aes(fill = group), width = 0.2, colour = "black") +
+    stat_compare_means(comparisons = compare_list, 
+                       label = "p.signif", 
+                       method = "t.test")
+
+  base +
+    scale_color_manual(values = palette) +
+    scale_fill_manual(values = palette) +
+    ggprism::theme_prism(base_size = 14) +
+    theme(legend.position = "none") +
+    xlab("") +
+    ylab(paste0(i, " (log2Ratio)"))
+  ggsave(filename = paste0(i, ".pdf"), width = 3, height = 3.5)
+}
+
+
+```
+

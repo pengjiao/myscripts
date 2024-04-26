@@ -1,0 +1,158 @@
+---
+title: ""
+author: "GV-RI_Joanna"
+date: "`r Sys.Date()`"
+output:
+  html_document:
+    number_sections: no
+    toc: yes
+    toc_depth: 6
+    toc_float: true
+    self_contained: true
+    thumbnails: true
+    lightbox: true
+    gallery: true
+    use_bookdown: false
+    highlight: haddock
+---
+
+## Load library
+```{r load packages, results='hide', message=F, warning=F,include=F}
+rm(list=ls())
+library(phyloseq)
+library(microbiome)
+library(tibble)
+library(dplyr)
+library(vegan)
+library(flextable)
+library(ggpubr)
+library(gginnards)
+# devtools::install_github("microsud/microbiomeutilities")
+library(microbiomeutilities)
+```
+
+
+
+```{r set color , include=F}
+# color set
+mycols <<- c(
+  "#3cb44b", "#4363d8", "#e6194b","#ffe119", 
+  "#911eb4", "#46f0f0", "#f032e6", "#bcf60c", "#fabebe",
+  "#008080", "#e6beff", "#9a6324", "#fffac8", "#800000",
+  "#aaffc3", "#808000", "#ffd8b1", "#000075", "#808080",
+  "#000000"
+)
+
+```
+
+
+## Import phyloseq
+
+```{r load data, message=F, warning=F,include=T}
+phy <- readRDS("../data_processing/gmu_16S_phyloseq_59samples.rds")
+print(phy) # 3570 taxa and 59 samples
+```
+
+## Data prcessing
+```{r}
+# processing raw data as needed
+phy_core <- core(phy, detection = 5, prevalence = .2) # change parameter if needed
+print(phy_core)   # 740 taxa and 59 samples
+```
+
+## Taxa composition
+### Stacked plot
+```{r fig.height= 6, fig.width=5, fig.align='center',echo=F, message=F, warning=F}
+ps.sel <- phy_core
+sample_data(ps.sel)$Groups <- factor(sample_data(ps.sel)$Groups,levels = c("Control","Model","Model_AC","Model_AC_GV971L","Model_AC_GV971H"))
+
+# plot barplot for each taxon level
+for (levels in c("Phylum","Class","Order","Family","Genus","Species")){
+  pseq <- ps.sel %>%
+    aggregate_taxa(level = levels) %>%
+    microbiome::transform(transform = "compositional") %>%
+    microbiomeutilities::aggregate_top_taxa2(top = 10, levels)
+  
+  p.bar <- microbiome::plot_composition(pseq,otu.sort = "abundance",  sample.sort = "Groups",average_by = "Groups") +
+    scale_fill_manual(values = mycols) +
+    scale_x_discrete(limits =levels(factor(sample_data(pseq)$Groups,levels = c("Control","Model","Model_AC","Model_AC_GV971L","Model_AC_GV971H"))))+
+    guides(fill = guide_legend(ncol = 1)) +
+    ylab("Relative Abundance (%)") +
+    xlab("") +
+    guides(fill = guide_legend(levels)) +
+    theme_minimal() +
+    theme(strip.text.x = element_text(size = 15, face = "bold")) +
+    theme(text = element_text(size=15,family = "sans")) +
+    theme(axis.text.x = element_text(angle = 45, size = 12, face = "bold",vjust=1,hjust = 1))+
+    theme(axis.text.y=element_text(size=15),
+          axis.title.x=element_text(size=15),
+          axis.title.y = element_blank())+
+    theme(legend.text=element_text(size=15),
+          legend.title = element_text(size=15))+
+    scale_y_continuous(labels = scales::percent)
+  
+  ggsave(p.bar, device="pdf",
+         filename =  paste0("composition_Groups_stacked.",levels,".pdf"), 
+         dpi = 300, height = 22, width = 18, units = "cm")
+  
+  if (levels == "Genus" || levels == "Species"){
+    ggsave(p.bar, device="pdf",
+         filename =  paste0("composition_Groups_stacked.",levels,".pdf"), 
+         dpi = 300, height = 22, width = 20, units = "cm")
+  }
+    if (levels == "Order"){
+    ggsave(p.bar, device="pdf",
+         filename =  paste0("composition_Groups_stacked.",levels,".pdf"), 
+         dpi = 300, height = 22, width = 23, units = "cm")
+  }
+}
+```
+
+
+
+### Individual plot
+```{r fig.height= 6, fig.width=5, fig.align='center',echo=F, message=F, warning=F}
+ps.sel <- phy_core
+sample_data(ps.sel)$Groups <- factor(sample_data(ps.sel)$Groups,levels = c("Control","Model","Model_AC","Model_AC_GV971L","Model_AC_GV971H"))
+
+# plot barplot for each taxon level
+for (levels in c("Phylum","Class","Order","Family","Genus","Species")){
+  pseq <- ps.sel %>%
+    aggregate_taxa(level = levels) %>%
+    microbiome::transform(transform = "compositional") %>%
+    microbiomeutilities::aggregate_top_taxa2(top = 10, levels)
+  
+  p.bar <- microbiome::plot_composition(pseq,otu.sort = "abundance",  sample.sort = "Groups",group_by = "Groups") +
+    scale_fill_manual(values = mycols) +
+    #scale_x_discrete(limits =levels(factor(sample_data(pseq)$Groups,levels = c("G1","G2","G3","G4"))))+
+    guides(fill = guide_legend(ncol = 1)) +
+    ylab("Relative Abundance (%)") +
+    xlab("") +
+    guides(fill = guide_legend(levels)) +
+    theme_minimal() +
+    theme(strip.text.x = element_text(size = 12, face = "bold")) +
+    theme(text = element_text(size=15,family = "sans")) +
+    theme(axis.text.x = element_text(angle = 45, size = 10, face = "bold",vjust=1,hjust = 1))+
+    theme(axis.text.y=element_text(size=15),
+          axis.title.x=element_text(size=15),
+          axis.title.y = element_blank())+
+    theme(legend.text=element_text(size=15),
+          legend.title = element_text(size=15))+
+    scale_y_continuous(labels = scales::percent)
+  
+  ggsave(p.bar, device="pdf",
+         filename =  paste0("composition_Groups_individual.",levels,".pdf"), 
+         dpi = 300, height = 20, width = 40, units = "cm")
+  
+  if (levels == "Genus"){
+    ggsave(p.bar, device="pdf",
+         filename =  paste0("composition_Groups_individual.",levels,".pdf"), 
+         dpi = 300, height = 20, width = 43, units = "cm")
+  }
+    if (levels == "Species" || levels == "Order"){
+    ggsave(p.bar, device="pdf",
+         filename =  paste0("composition_Groups_individual.",levels,".pdf"), 
+         dpi = 300, height = 20, width = 45, units = "cm")
+  }
+}
+```

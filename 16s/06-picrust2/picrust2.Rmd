@@ -1,0 +1,68 @@
+---
+title: "Picrust2 pathway analysis"
+author: ""
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+## Load library
+```{r load packages, results='hide', message=F, warning=F,include=F}
+rm(list=ls())
+library(biomformat)
+library(reltools)
+library(seqinr)
+```
+
+
+## Import phyloseq
+```{r load data, message=F, warning=F,include=T}
+phy <- readRDS("../data_processing/gmu_16S_phyloseq_60samples.rds")
+print(phy) # 3570 taxa and 60 samples
+```
+## nf-core phyloseq to biom
+```{r}
+# OTU1 = t(as(otu_table(phy), "matrix"))
+# otu<-as(otu_table(OTU1,taxa_are_rows = TRUE),"matrix") %>% t()
+# head(otu)
+otu_biom<-make_biom(data=otu_table(phy))
+write_biom(otu_biom, paste0("otu_biom.biom"))
+```
+
+## nf-core phyloseq to fasta
+```{r}
+phyloseq_new.seq <- refseq(phy)  %>% as.list() 
+write.fasta(phyloseq_new.seq , names(phyloseq_new.seq),paste0("uniqueSeqs.fasta"))
+```
+
+## run picrust2
+```{shell}
+cd ~/Desktop/projects/gmu_project/16S_20220824/06-picrust2
+mkdir -p KEGG/picrust2_out_pipeline
+conda activate picrust2-2.3.0
+#Place reads into reference tree
+place_seqs.py -s uniqueSeqs.fasta -o KEGG/picrust2_out_pipeline/out.tre -p 10 --intermediate KEGG/picrust2_out_pipeline/intermediate/place_seqs
+
+#Hidden-state prediction of gene families
+hsp.py -i 16S -t KEGG/picrust2_out_pipeline/out.tre -o KEGG/picrust2_out_pipeline/marker_predicted_and_nsti.tsv.gz -p 10 -n
+hsp.py -i KO -t KEGG/picrust2_out_pipeline/out.tre -o KEGG/picrust2_out_pipeline/EC_predicted.tsv.gz -p 10
+
+#Generate metagenome predictions
+# <!-- #Pathway-level inference -->
+################KO
+##########not strat_out
+echo 'KEGG not strat_out'
+metagenome_pipeline.py -i otu_biom.biom -m KEGG/picrust2_out_pipeline/marker_predicted_and_nsti.tsv.gz -f KEGG/picrust2_out_pipeline/EC_predicted.tsv.gz -o KEGG/picrust2_out_pipeline/EC_metagenome_out_unstrat 
+
+# convert_table.py KEGG/picrust2_out_pipeline/EC_metagenome_out_unstrat/pred_metagenome_unstrat.tsv.gz -c contrib_to_legacy -o KEGG/picrust2_out_pipeline/EC_metagenome_out_unstrat/pred_metagenome_unstrat.legacy.tsv.gz
+
+
+pathway_pipeline.py -i KEGG/picrust2_out_pipeline/EC_metagenome_out_unstrat/pred_metagenome_unstrat.tsv.gz -o KEGG/picrust2_out_pipeline/KEGG_pathways_unstrat -p 10 --no_regroup --map /home/zhiyu/data/databases/16S/pircust2_KEGG/KEGG_pathways_to_KO.tsv #data/KEGG_pathways_to_KO.tsv
+
+add_descriptions.py -i KEGG/picrust2_out_pipeline/KEGG_pathways_unstrat/path_abun_unstrat.tsv.gz --custom_map_table /home/zhiyu/data/databases/16S/pircust2_KEGG/KEGG_pathways_info.tsv -o KEGG/picrust2_out_pipeline/KEGG_pathways_unstrat/path_abun_unstrat_descrip.tsv.gz
+
+# gunzip output/pircust2/KEGG/picrust2_out_pipeline/KEGG_pathways_unstrat/path_abun_contrib.tsv.gz
+gunzip KEGG/picrust2_out_pipeline/KEGG_pathways_unstrat/path_abun_unstrat_descrip.tsv.gz
+
+```
+
+

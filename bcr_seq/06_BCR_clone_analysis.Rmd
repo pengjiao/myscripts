@@ -1,0 +1,426 @@
+---
+title: "06_BCR_clone_analysis"
+author: ""
+date: "2024-01-15"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Load library
+```{r}
+library(Seurat)
+library(SeuratData)
+library(airr)
+library(stringr)
+library(ggsankey)
+
+library(scoper)
+library(alakazam)
+library(shazam)
+
+```
+
+## Data
+```{r}
+seu.obj <- readRDS("../results/All_SeuratObject_annotated_new_BCR.RDS")
+# meta.df <- seu.obj@meta.data
+# meta.names <- meta.df$cell_id
+seu.obj$isotype <- seu.obj$c_call
+seu.obj$isotype[seu.obj$c_call == "Igha"] <- "IGHA"
+seu.obj$isotype[seu.obj$c_call == "Ighd"] <- "IGHD"
+seu.obj$isotype[seu.obj$c_call == "Ighm"] <- "IGHM"
+seu.obj$isotype[seu.obj$c_call == "Ighe"] <- "IGHE"
+seu.obj$isotype[grepl("Ighg", seu.obj$c_call)] <- "IGHG"
+seu.obj$isotype[grepl("Igkc", seu.obj$c_call)] <- NA
+seu.obj$isotype[grepl("Iglc", seu.obj$c_call)] <- NA
+meta.data <- seu.obj@meta.data
+table(seu.obj$Group)
+
+seu.new <- seu.obj[,!is.na(seu.obj$cdr3_aa)]
+table(seu.new$Group)
+
+mycols  <- ggsci::pal_lancet("lanonc",1)(7)
+mycols
+DimPlot(seu.obj, reduction = "umap",group.by = "type")
+
+DimPlot(seu.obj, reduction = "umap",group.by = "isotype", split.by = "isotype", cols = mycols)
+DimPlot(seu.obj, reduction = "umap",group.by = "isotype", split.by = "Group", cols = mycols)
+FeaturePlot(seu.obj, features = "Slpi")
+
+metadf <- seu.obj@meta.data %>%
+  dplyr::group_by(Group, isotype) %>%
+  dplyr::summarise(n = n()) %>%
+  dplyr::mutate(prop = n / sum(n)) %>%
+  dplyr::ungroup() 
+
+ggplot(metadf, aes(x = Group, y = prop, fill = isotype)) +
+  geom_bar(stat = "identity", width=0.7, color = "gray20") +
+  theme(axis.title.y = element_blank(),
+        axis.title.x = element_blank()) +
+  scale_fill_manual(values = mycols) +
+  theme_bw()
+```
+
+```{r}
+pos.markers <- read.csv("../results/Cluster_pos_markers_res1.csv")
+
+top10 <- pos.markers %>%
+  group_by(cluster) %>%
+  dplyr::filter(avg_log2FC > 0.5) %>%
+    slice_head(n = 3) %>%
+    ungroup()
+
+DotPlot(seu.obj, features = unique(top10$gene)) + RotatedAxis() + NoLegend()
+
+DotPlot(seu.obj, features = c("Cd1d1", "Cd9")) + NoLegend()
+DotPlot(seu.obj, features = c("Irf4", "Slpi", "Sdc1", "Prdm1")) + NoLegend()
+DotPlot(seu.obj, features = c("Cd83", "Npm1", "Eif5a", "Ran", "Mif", "Eif4a1")) + NoLegend()
+DotPlot(seu.obj, features = c("Mki67", "Bcl6", "Cd22", "Bach2", "Foxo1")) + NoLegend()
+DotPlot(seu.obj, features = c("Apoe", "Plac8", "Vim", "Cd38", "Cd69")) + NoLegend()
+
+Bmem <- c("Pml", "Phf21a", "Runx3", "Klf9", "Zbtb20", "Kmt2c", "Ski", "Tcf4", "Bmi1", "Cd80", "Il6ra", "Itgb7", "Ccr6", "Pecam1", "Nid1", "Rgmb", "Ackr3", "Cdh17", "Ackr2", "Itga4", "Naip2", "Birc6", "Bcl2", "Traf1", "Malt1", "Ccnd3", "Rb1")
+
+DotPlot(seu.obj, features = Bmem ) + NoLegend()
+
+```
+
+```{bash}
+Rscript scripts/cell_type_prediction.R \
+--Seurat_object_path ../results/All_SeuratObject_annotated_new.RDS \
+--marker_lists scripts/main_cell_types.csv \
+--assay 'RNA' \
+--clustering_use 'RNA_snn_res.1' \
+--output_path ../results \
+2>&1 | tee ../results/cell_type_prediction_log.txt
+```
+
+```{r}
+library(Seurat)
+library(scales)
+library(fields)
+library(data.table)
+library(ggplot2)
+#DATA <- readRDS("../results/All_SeuratObject_annotated_new.RDS")
+col_scale <- c("grey85","navy")
+myCorGrad <- colorRampPalette(c("gray85","gray85","gray70","orange3","firebrick","red"))(9)
+
+DATA <- seu.obj
+DATA <- FindClusters(DATA, resolution = 0.6)
+### LOAD cell marker list
+mar.dir <- c("scripts/main_cell_types.csv","scripts/bcell_types.csv","scripts/bcell_types_germsub.csv","scripts/bcell_types_germsub_zonesub.csv")
+out.dir <- "../results"
+marker_lists <- unlist(strsplit(mar.dir,","))
+print(marker_lists)
+
+for(i in sub(".*/","",sub(".csv","",marker_lists)) ){
+  PATH <- paste0(out.dir,"/",sub(".*/","",i))
+  #if(!dir.exists(PATH)){dir.create(PATH,recursive = T)}
+  
+  #cat("\nProcessing list '", sub(".*/","",i) ,"' ...\n")
+  fullname <- marker_lists[grep(paste0('/',i,'.csv'),marker_lists)]
+  if (grepl(";", readLines(fullname, n=1))) {
+    cellIDs <- read.csv2(fullname,header=T)
+  } else {
+    cellIDs <- read.csv(fullname,header=T)
+  }
+  cellIDs <- as.list(as.data.frame(cellIDs))
+  cellIDs <- lapply(cellIDs, function(x) casefold( as.character(x[x!=""]) ) )
+  print(cellIDs)
+  
+cell_ident <- unique(unlist(cellIDs))
+cell_ident <- lapply(cellIDs,function(x) ifelse(cell_ident %in% x,1,ifelse(paste0("-",cell_ident) %in% x,-1,0)))
+cell_ident <- as.data.frame(cell_ident)
+rownames(cell_ident) <- casefold(unique(unlist(cellIDs)))
+
+sel <- rownames(DATA@assays[['RNA']]$data) [ casefold(rownames(DATA@assays[['RNA']]$data)) %in% rownames(cell_ident) ]
+#sel <- rownames(cell_ident)[ rownames(cell_ident) %in% casefold(rownames(DATA@assays[[opt$assay]]@data)) ]
+cell_ident <- cell_ident[ casefold(sel ) ,]
+
+cors <- apply(DATA@assays[['RNA']]$data[ sel ,],2,function(x) cor(x , cell_ident) )
+cors[is.na(cors)] <- -1
+rownames(cors) <- colnames(cell_ident)
+print(cors[,1:5])
+
+
+pred <- unlist( apply(cors,2,function(x) colnames(cell_ident) [which.max(x)]) )
+my_nas <- colnames(cors)[! colnames(cors) %in% names(pred)]
+pred <- c(pred , setNames(rep(NA,length(my_nas)),my_nas))
+
+DATA <- AddMetaData(DATA,metadata = pred,col.name = paste0("cell_pred_correlation_",i))
+}
+
+DATA$cell_pred_correlation_main_cell_types
+DimPlot(DATA,group.by = "cell_pred_correlation_main_cell_types", label = T, repel = T)
+DimPlot(DATA,group.by = "cell_pred_correlation_bcell_types", label = T, repel = T, split.by = "Group")
+DimPlot(DATA,group.by = "cell_pred_correlation_bcell_types", label = T, repel = T)
+
+DimPlot(DATA,group.by = "seurat_clusters", label = T, repel = T)
+
+table(DATA$seurat_clusters, DATA$cell_pred_correlation_main_cell_types)
+
+# plan(strategy = "multicore", workers = 30)
+# pos.markers <- FindAllMarkers(DATA, only.pos = TRUE)
+# write.csv(pos.markers, file="../results/Cluster_pos_markers_res06.csv")
+
+top10 <- pos.markers %>%
+  group_by(cluster) %>%
+  dplyr::filter(avg_log2FC > 0.5) %>%
+    slice_head(n = 10) %>%
+    ungroup()
+```
+
+
+```{r}
+library(ExperimentHub)
+library(clustifyr)
+library(Matrix)
+library(Seurat)
+eh <- ExperimentHub()
+refs <- query(eh, "clustifyrdatahub")
+ref_mca <- refs[['EH3444']]
+variable_genes <- VariableFeatures(DATA)
+
+
+ref <- clustify(
+  input = DATA@assays$RNA$counts,
+  metadata = DATA$RNA_snn_res.0.6,
+  ref_mat = ref_mca,
+  query_genes = variable_genes
+)
+ref <- ref[,grepl("Spleen", colnames(ref))]
+
+ref2 <- cor_to_call(
+  cor_mat = ref,                  # matrix correlation coefficients
+  cluster_col = "RNA_snn_res.0.6" # name of column in meta.data containing cell clusters
+)
+
+meta2 <- call_to_metadata(
+  res = ref2,                     # data.frame of called cell type for each cluster
+  metadata = DATA@meta.data,           # original meta.data table containing cell clusters
+  cluster_col = "RNA_snn_res.0.6" # name of column in meta.data containing cell clusters
+)
+
+table(meta2$type.clustify, meta2$cell_pred_correlation_bcell_types)
+
+```
+
+
+
+
+## clone analysis
+
+### clone defination
+```{r}
+# Group by V gene, J gene and junction length, and calculate the distance to the nearest sequence in the group (shazam r package)
+airr_heavy <- distToNearest(meta2[meta2$Group %in% c("PrPlasmaB", "PrAgPos"),], sequenceColumn="junction",
+ vCallColumn="v_call", jCallColumn="j_call",
+ model="ham", first=FALSE, normalize="len",
+ nproc=60)
+
+airr_heavy_all <- distToNearest(meta2, sequenceColumn="junction",
+ vCallColumn="v_call", jCallColumn="j_call",
+ model="ham", first=FALSE, normalize="len",
+ nproc=60)
+
+
+hist(airr_heavy$dist_nearest[airr_heavy$Group == "PrPlasmaB"],breaks = 100)
+hist(airr_heavy$dist_nearest[airr_heavy$Group == "PrAgPos"],breaks = 100)
+hist(airr_heavy$dist_nearest[airr_heavy$Group == "DNAPanB"],breaks = 100)
+hist(airr_heavy$dist_nearest[airr_heavy$Group %in% c("PrAgPos", "PrPlasmaB")],breaks = 100)
+abline(v = 0.085, col = "red", lwd = 2)
+
+## Find a Threshold
+plan(strategy = "multicore", workers = 30)
+threshold <- findThreshold(airr_heavy[['dist_nearest']], method="gmm")
+plot(threshold, binwidth=0.02, silent=FALSE)
+
+# Assign clonal clusters
+hier.res <- hierarchicalClones(airr_heavy_all, threshold=threshold@threshold)
+hier.res.sel <- hierarchicalClones(airr_heavy, threshold=threshold@threshold)
+
+hier.res.df <- as.data.frame(hier.res)
+hier.res.df.sel <- as.data.frame(hier.res.sel)
+
+airr::write_rearrangement(hier.res.df, file = "../results/heavy_airr_clone_scoper.tsv")
+airr::write_rearrangement(hier.res.df.sel, file = "../results/heavy_airr_clone_scoper_ag_plasma.tsv")
+
+# clone summary
+clone.input <-airr::read_rearrangement("../results/heavy_airr_clone_scoper.tsv")
+clones.count <- countClones(clone.input, group="Group", copy="duplicate_count", clone="clone_id")
+head(clones.count, 5)
+
+# Partitions the data on the sample column
+# Calculates a 95% confidence interval via 200 bootstrap realizations
+curve <- estimateAbundance(clone.input, group="Group", ci=0.95, nboot=200, clone="clone_id")
+plot(curve)
+
+sample_curve <- alphaDiversity(clone.input, group="Group", clone="clone_id",
+                                min_q=0, max_q=4, step_q=0.1,
+                                ci=0.95, nboot=100)
+
+p <- plot(sample_curve, silent = T)
+p + geom_vline(xintercept = c(0,1,2), color = "grey50", linetype = "dashed") +
+    geom_text(data = data.frame(q = c(0,1,2), y = round(max(p$data$d_upper)/2),
+              label = c("Richness", "Shannon", "Simpson")),
+              aes(x = q, y = y,label = label), size = 3, angle = 90, vjust = -0.4, inherit.aes  =  F, color = "grey50")
+
+
+```
+
+### analysis
+
+#### sankey plot for cdrh3, cdrl3 and isotype
+```{r}
+s1.plot <- list()
+for (i in 1:15) {
+  meta.sel <- meta.data[meta.data$Group == "PrPlasmaB",]
+  top.sel <- top_per_group[top_per_group$Var1 == "PrPlasmaB",]
+  meta.sel <- meta.sel[!is.na(meta.sel$isotype),]
+  meta.sel <- meta.sel[!is.na(meta.sel$cdr3_aa),]
+  meta.sel <- meta.sel[meta.sel$cdr3_aa %in% top.sel$Var2,]
+    metalong <- make_long(
+    meta.sel[meta.sel$cdr3_aa == top.sel$Var2[i],], 
+    cdr3_aa, isotype, cdr3_aa_l)
+  p1 <- ggplot(metalong, aes(x = x,                        
+                     next_x = next_x,                                     
+                     node = node,
+                     next_node = next_node,        
+                     fill = factor(node),
+                     label = node)) 
+  p1 <- p1 +geom_sankey(flow.alpha = 0.5,          #This Creates the transparency of your node 
+                      node.color = "black",     # This is your node color        
+                      show.legend = TRUE) 
+  s1.plot[[i]] <- p1 + geom_sankey_label(Size = 0.5,
+                       color = "black",
+                       fill = "white") +
+  theme_bw() +
+  theme(legend.position = 'none') +
+  theme(axis.title = element_blank(),
+                 axis.text.y = element_blank(),
+                 axis.ticks = element_blank(),
+                 panel.grid = element_blank())
+}
+
+plot_grid(plotlist = s1.plot[1:15], ncol = 5)
+
+  meta.sel <- meta.data[!is.na(meta.data$cdr3_aa),]
+  metalong <- make_long(meta.sel[meta.sel$cdr3_aa == "TTGFAY",], 
+  cdr3_aa, Group, cdr3_aa_l)
+  p1 <- ggplot(metalong, aes(x = x,                        
+                     next_x = next_x,                                     
+                     node = node,
+                     next_node = next_node,        
+                     fill = factor(node),
+                     label = node)) 
+  p1 <- p1 +geom_sankey(flow.alpha = 0.5,          #This Creates the transparency of your node 
+                      node.color = "black",     # This is your node color        
+                      show.legend = TRUE) 
+  p1 + geom_sankey_label(Size = 0.5,
+                       color = "black",
+                       fill = "white") +
+  theme_bw() +
+  theme(legend.position = 'none') +
+  theme(axis.title = element_blank(),
+                 axis.text.y = element_blank(),
+                 axis.ticks = element_blank(),
+                 panel.grid = element_blank())
+```
+
+
+```{r}
+cdr3.freq <- data.frame(table(meta.data$Group, meta.data$cdr3_aa,meta.data$isotype))
+top_per_group <- cdr3.freq %>%
+  group_by(Var1) %>%
+  arrange(desc(Freq)) %>%
+  slice_head(n = 50) %>%
+  ungroup()
+
+merged.data <- left_join(top_per_group, meta.data, by = c("Var2" = "cdr3_aa", "Var1" = "Group"), multiple="first")
+merged.data <- left_join(top_per_group, meta.data, by = c("Var2" = "cdr3_aa", "Var1" = "Group"))
+
+groups <- unique(merged.data$Var1)
+p.list <- list()
+for(i in 1:5){
+  merged_data_sorted <- merged.data %>%
+  filter(Var1 == groups[i]) %>%
+  arrange(Freq)
+  p.list[[i]] <- ggplot(merged_data_sorted, aes(x = reorder(Var2, -Freq), y = Freq, fill = isotype)) +
+    geom_bar(stat = "identity") +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1))
+  
+}
+
+merged_data_sorted <- merged.data %>%
+  arrange(Freq)
+ggplot(merged_data_sorted, aes(x = reorder(Var2, -Freq), y = Freq, fill = isotype)) +
+  geom_bar(stat = "identity") +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1))
+
+```
+
+```{r}
+## lieanage
+phylip_exec <- "/bin/dnapars"
+clone.sub <- airr::read_rearrangement("../results/heavy_airr_clone_scoper.tsv")
+clone.sub$junction_length <- nchar(clone.sub$junction)
+clone.sub <- clone.sub[!clone.sub$rev_comp,]
+clone.sub <- clone.sub[clone.sub$complete_vdj,]
+
+
+clone.chosen <- clone.sub[clone.sub$type == "Plasma cell(Spleen)" | clone.sub$cell_pred_correlation_bcell_types %in% c("PlasmaCells", "MemoryCells", "PreMemCells"),]
+
+top.clone.group <- data.frame(table(clone.chosen$Group, clone.chosen$clone_id)) %>%
+  group_by(Var1) %>%
+  arrange(desc(Freq)) %>%
+  slice_head(n = 50) %>%
+  ungroup()
+
+
+clone.sel <- clone.sub[clone.sub$clone_id == top.clone.group$Var2[top.clone.group$Var1 == "PrAgPos"][1],]
+#table(clone.sel$c_call)
+clone.sum <- data.frame(table(clone.sub$c_call, clone.sub$clone_id)) 
+clones <-  makeChangeoClone(clone.sel, text_fields=c("Group", "c_call", "cdr3_aa", "isotype", "type", "cell_pred_correlation_bcell_types"),  num_fields="duplicate_count", pad_end = T)
+graph <- buildPhylipLineage(clones, phylip_exec, rm_temp=TRUE)
+
+V(graph)$color <- "bisque"
+V(graph)$color[V(graph)$cell_pred_correlation_bcell_types == "PlasmaCells"] <- "dodgerblue"
+V(graph)$color[V(graph)$cell_pred_correlation_bcell_types == "MemoryCells"] <- "forestgreen"
+V(graph)$color[V(graph)$cell_pred_correlation_bcell_types == "PreMemCells"] <- "orange"
+
+V(graph)$color[V(graph)$name == "Germline"] <- "black"
+V(graph)$color[grepl("Inferred", V(graph)$name)] <- "white"
+
+V(graph)$shape <- "circle"
+V(graph)$shape[V(graph)$isotype == "IGHG"] <- "square"
+V(graph)$shape[V(graph)$isotype == "IGHM"] <- "triangle"
+V(graph)$shape[V(graph)$isotype == "IGHA"] <- "vrectangle"
+V(graph)$shape[V(graph)$isotype == "IGHD"] <- "csquare"
+
+
+
+
+V(graph)$label <- V(graph)$cdr3_aa
+E(graph)$label <- ""
+
+pdf("../results/test.pdf", width = 12, height=10)
+par(mar=c(0,0,0,0)+0.000001)
+plot(graph, layout=layout_as_tree, edge.arrow.mode=0, vertex.frame.color="gray70",
+     vertex.label.color="black", vertex.size=12, vertex.label.family='sans', vertex.label.cex=0.6)
+dev.off()
+
+
+ggraph(graph, layout = 'igraph', algorithm = 'tree') + 
+  geom_edge_diagonal(edge_width = 0.5, alpha =.4) +
+  geom_node_label(aes(label=cdr3_aa, fill= cdr3_aa),
+                  col = "white", fontface = "bold", hjust = "inward", repel=T) +
+  scale_color_brewer(palette="Set2") +
+  guides(fill = FALSE) +
+  theme_void()+
+  coord_flip()
+
+```
+
+

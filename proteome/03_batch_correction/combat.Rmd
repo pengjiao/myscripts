@@ -1,0 +1,111 @@
+---
+title: "batch correction"
+author: ""
+date: "7/22/2022"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## batch correction : Combat
+
+### data prepare
+```{r}
+library(PCAtools)
+library(readxl)
+library(tibble)
+library(xlsx)
+library(openxlsx)
+library(factoextra)
+load("../../../input/metabolites/ninth_hosp_project_metab_pos_neg_poma.RData")
+dat <- as.matrix(metab_neg_log@assays@data@listData[[1]])
+
+cl <- read_excel("01_pca&kmeans/sample_cluster_group.xlsx")
+cl <- column_to_rownames(cl, var="ID")
+cl$cluster <- as.factor(cl$cluster)
+cl$group <- substr(rownames(cl),1,2)
+cl$group[cl$group=="MC"] <- "MCI"
+cl$group <- factor(cl$group, levels = c("PD", "MCI", "AD"))
+```
+
+
+### NULL model
+```{r}
+library(sva)
+modcombat = model.matrix(~1, data=cl)
+combat_dat = ComBat(dat=dat, batch=cl$cluster, mod=modcombat, par.prior=TRUE, prior.plots=FALSE)
+write.xlsx(as.data.frame(combat_dat), "02_batch_correction/neg_metablites_combat.xlsx",rowNames=T)
+## pca
+dat2 <- data.frame(t(combat_dat))
+res.pca <- FactoMineR::PCA(dat2,  graph = FALSE)
+pdf("02_batch_correction/combat_pca_cluster.pdf",width = 6, height = 4)
+fviz_pca_ind(res.pca,
+             label = "all", # hide individual labels
+             habillage = cl$cluster, # color by groups
+             palette = c("#00AFBB", "#E7B800", "#FC4E07"),
+             addEllipses = TRUE, # Concentration ellipses,
+             labelsize = 1,
+             pointsize = 0.5,
+             )
+
+dev.off()
+```
+
+
+### pca 
+```{r}
+pdf("02_batch_correction/combat_pca_group.pdf",width = 6, height = 4)
+fviz_pca_ind(res.pca,
+             label = "all", # hide individual labels
+             habillage = cl$group, # color by groups
+            # palette = c("#00AFBB", "#E7B800", "#FC4E07"),
+             addEllipses = TRUE, # Concentration ellipses,
+             labelsize = 2,
+             #pointsize = 0.5,
+             )
+
+dev.off()
+
+
+```
+
+
+
+### full model
+```{r}
+# mode <- model.matrix(~as.factor(cl$group), data = cl)
+# cdat = ComBat(dat=dat, batch=cl$cluster, mod=mode, par.prior=TRUE, prior.plots=FALSE)
+# ## pca
+# dat2 <- data.frame(t(cdat))
+# res.pca <- FactoMineR::PCA(dat2,  graph = FALSE)
+# pdf("02_batch_correction/combat_pca_mod_group.pdf",width = 6, height = 4)
+# fviz_pca_ind(res.pca,
+#              label = "all", # hide individual labels
+#              habillage = cl$cluster, # color by groups
+#             # palette = c("#00AFBB", "#E7B800", "#FC4E07"),
+#              addEllipses = TRUE, # Concentration ellipses,
+#              labelsize = 1,
+#              pointsize = 0.5,
+#              )
+# 
+# dev.off()
+```
+
+
+### estimate batch and other artifacts
+```{r}
+# n.sv = num.sv(dat,mode,method="leek")
+# svobj = sva(dat,mode,modcombat,n.sv=n.sv)
+```
+
+###  Significance analysis can then be performed directly on the adjusted data using the model matrix and null model matrix
+```{r}
+# pValuesComBat = f.pvalue(combat_dat,mode,modcombat)
+# qValuesComBat = p.adjust(pValuesComBat,method="BH")
+```
+
+
+
+

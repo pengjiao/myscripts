@@ -1,0 +1,51 @@
+---
+title: "Untitled"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# load data 
+```{r}
+dat <- read_excel("proteomics_young_old_disease_enrichment.xlsx")
+dat1 <- dat[c(1,7:36),]
+dat1 <- row_to_names(dat1,1)
+dat1$`Enrichment FDR` <- as.numeric(dat1$`Enrichment FDR`)
+
+
+dat1$Pathway[-c(4,6)] <- gsub("[0-9]*", "", dat1$Pathway[-c(4,6)])
+dat1$Pathway <- gsub("DOID:", "", dat1$Pathway)
+dat1$Pathway[4] <- "type 1 diabetes mellitus"
+dat1$Pathway[6] <- "type 2 diabetes mellitus"
+
+dat1$adjust <- -log10(dat1$`Enrichment FDR`)
+
+dat2 <- dat1[1:15,]
+```
+
+# plot
+
+```{r}
+library("ggplot2") 
+
+# Create lollipop plot with custom colors
+palettes = c("#00aba9", "#fa6800", "#647687")
+
+ggplot(dat2, aes(x=Pathway, y= adjust)) +
+  geom_segment( aes(x= reorder(Pathway,adjust), xend=Pathway, y=0, yend=adjust), 
+                 size=2,color="#00aba9") +
+  geom_point( size=2,color="red")+
+  theme_bw()+
+  coord_flip()+
+  xlab("enrichment pathways")+
+  ylab("-log10(fdr)")+
+  scale_colour_manual(values=c("#00aba9"))
+      
+ggsave("young_old_enrichment_disease_allience_result.pdf",width=4,height = 3)
+  
+
+```
+
+

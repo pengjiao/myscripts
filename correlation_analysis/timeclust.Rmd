@@ -1,0 +1,100 @@
+---
+title: "timeclust"
+author: ""
+date: "2021/3/1"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Library
+```{r}
+library(TCseq)
+library(viridis)
+library(tibble)
+library(ggplot2)
+library(ggpubr)
+library(cowplot)
+library(tidyverse)
+```
+
+## Data
+```{r}
+mycol<-viridis(10)
+group <- c("NC", "SCD1", "aMCI", "AD_1", "AD_2")
+
+meta_input <- read_excel("../../input/mmse_categorized_5groups_20200302/six-hospital_NC_SCD1_aMCI_AD_SHJW_AD_MMSE_5groups_20200302.xlsx")
+
+data_input <- read_excel("../../input/rawdata_metabolite/SixHosp_JW_322subjects_metabolites_NC_SCD1_aMCI_AD1_AD2_Above20percentMissingDeleted_imputed_by_group_knnVIM.xlsx")
+data_input <- data_input[match(meta_input$sample_FACS, data_input$sample_FACS),]
+
+dat <- cbind(meta_input[c("sample_FACS", "Group", "Gender", "Age")],
+              data_input[,-1])
+df <- subset(dat, select = -c(sample_FACS, Gender, Age))
+
+df.2 <- df %>% 
+  group_by(Group) %>% 
+  summarise_if(is.numeric,list(median), na.rm =T)
+rownames(df.2) <- NULL
+df.3 <- column_to_rownames(df.2, var = "Group")
+df.4 <- data.frame(t(df.3))
+df.4 <- df.4[,group]
+```
+
+## timeclust
+```{r}
+t <- as.matrix(df.4)
+tca <- timeclust(t, algo = "km", k = 8, standardize = TRUE)
+p <- timeclustplot(tca, value = "z-score(PRKM)", cols = 3,membership.color = mycol)
+
+p_list <- list()
+for (i in 1:length(p)) {
+  p_list[[i]] <- as.data.frame(p[[i]][["data"]])
+  p_list[[i]]$cluster <- paste("Cluster", i, sep = ".")
+}
+timeclust <- do.call(rbind, p_list)
+write.csv(timeclust,file = "timeclust.8cluster.median.csv",row.names = F)
+
+## plot
+mycols <- c(as.character(see::material_colors()),
+            as.character(see::see_colors()),
+            as.character(see::pizza_colors()),
+            as.character(see::metro_colors()),
+            as.character(see::flat_colors()),
+            as.character(see::bluebrown_colors()),
+            as.character(see::flat_colors()),
+            as.character(see::metro_colors()),
+            as.character(see::social_colors()),
+            as.character(see::material_colors()),
+            as.character(see::social_colors()))
+
+types<-unique(timeclust$cluster)
+
+plot_list <- list()
+for (i in types) {
+  
+  data2 <- filter(timeclust,cluster == i)  
+  data2 <- droplevels(data2)
+  
+  p <- ggline(data2, x = "time", y = "value",
+              color = "group",
+              palette = mycols,
+              add = "dotplot", xlab = "")
+  
+  
+  p<-ggpar(p,main=paste("Cluster",i,"by hclust"),legend.title = "")
+  
+  plot_list[[i]] = p
+  
+  ggsave(paste(i,".pdf"), width = 6, height = 5)
+  
+}
+
+## save all plots in one figure
+P <- plot_grid(plotlist = plot_list)
+P
+ggsave(filename = "plots_grid.pdf", width = 26, height = 18)
+```
+

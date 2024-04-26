@@ -1,0 +1,70 @@
+---
+title: "Data analysis"
+author: ""
+date: "`r Sys.Date()`"
+output:
+  html_document:
+    number_sections: no
+    toc: yes
+    toc_depth: 6
+    toc_float: true
+    self_contained: true
+    thumbnails: true
+    lightbox: true
+    gallery: true
+    use_bookdown: false
+    highlight: haddock
+---
+
+## Load library
+```{r load packages, results='hide', message=F, warning=F,include=F}
+rm(list=ls())
+library(phyloseq)
+library(PCAtools)
+library(microbiome)
+library(tibble)
+library(dplyr)
+```
+
+## Import phyloseq
+```{r load data, message=F, warning=F,include=T}
+phy <- readRDS("../data_processing/gmu_16S_phyloseq_59samples.rds")
+print(phy) # 3570 taxa and 59 samples
+```
+
+## Data processing
+```{r}
+# processing raw data as needed
+phy_core <- core(phy, detection = 5, prevalence = .2) # change parameter if needed
+print(phy_core)   # 740 taxa and 59 samples
+# metat_core <- meta(phy_core)
+```
+
+## PCA
+```{r, message=F,warning=F,include=T}
+phy_tmp <- microbiome::transform(phy_core,transform = "clr") # clr transformation for 16S dataset
+x <- abundances(phy_tmp) 
+dim(x) # 740 59
+
+metat_sele <- meta(phy_tmp) %>% dplyr::select(Groups) # subset variables
+#metat_sele$age <- as.numeric(metat_sele$age)
+metat_sele$Groups <- factor(metat_sele$Groups,levels = c("Control","Model","Model_AC","Model_AC_GV971L","Model_AC_GV971H"))
+# metat_sele$timepoint <- as.factor(metat_sele$timepoint)
+dim(metat_sele) # 59 1
+
+p <- PCAtools::pca(x,metadata=metat_sele,center = T,scale = T)
+```
+
+### Screeplot
+```{r, message=F,warning=F,echo=F,fig.height= 8, fig.width=6,eval=T}
+screeplot(p,axisLabSize = 10,components = 1:20) 
+ggsave("screeplot.pdf",width = 8,height = 8)
+```
+
+### Biplot
+```{r, message=F,warning=F,include=T,  fig.height= 7, fig.width=10}
+for (i in colnames(metat_sele)){ # loop for plot PCA
+ biplot(p,colby = i,lab=NULL,title = paste0("PCA ",i),legendPosition = "right",pointSize = 1.5,axisLabSize = 12,titleLabSize = 12,legendLabSize = 10,legendTitleSize = 10,legendIconSize = 2)
+ ggsave(filename = paste0("PCA_",i,".pdf"), width=7.5, height=6)
+}
+```

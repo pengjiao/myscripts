@@ -1,0 +1,271 @@
+---
+title: "qgraph_network_plot"
+author: ""
+date: "2022/8/8"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Load library
+```{r}
+library(qgraph)
+library(igraph)
+library(dplyr)
+library(rstatix)
+```
+
+## nmo corr 07
+```{r}
+group_name <- "nmo"
+cor_thres <- "0.7"
+info.input <- read.table(paste0("output_corr07_allfeatures/", group_name, 
+                                "/cluster_membership_centrality_", 
+                                group_name, "_table.txt"), header = T)
+
+link.input <- read.table(paste0("output_corr07_allfeatures/", group_name, 
+                               "/Multidata_Network_threshold", cor_thres, "_", 
+                               group_name, "_linkmatrix.txt"))
+colnames(link.input) <- link.input[1,]
+link <- link.input[-1,]
+
+info <- info.input
+colnames(info)[1] <- "name"
+info$immune_name <- ifelse(grepl("^X", info$name), info$Name, NA)
+info$cytokine_name <- ifelse(grepl("^Y", info$name), info$Name, NA)
+info$metabolite_name <- ifelse(grepl("^Z", info$name), info$Name, NA)
+
+info$omics <- case_when(grepl("^X", info$name) ~ "immune",
+                        grepl("^Y", info$name) ~ "cytokine",
+                        grepl("^Z", info$name) ~ "metabolite")
+info$cluster <- paste0("C", info$Cluster)
+
+g <- graph_from_data_frame(link)
+info.new <- info[match(V(g)$name, info$name),]
+
+omics <- info.new$omics
+Shapes <- case_when(omics == "immune" ~ "triangle",
+                    omics == "cytokine" ~ "circle",
+                    omics == "metabolite" ~ "square")
+Clusters <- list()
+for (i in unique(info.new$cluster)) {
+  Clusters[[i]] <- which(info.new$cluster == i)
+}
+names(Clusters) <- unique(info.new$cluster)
+
+link.map <- info.new[!duplicated(info.new$name),]
+link.key <- link.map$Name
+names(link.key) <- link.map$name
+link.df <- apply(link[,1:2], 2, function(x){recode(x, !!!link.key)}) %>% 
+  data.frame() %>% 
+  mutate(weight = link$weight)
+mycols <- ifelse(link.df$weight > 0, adjustcolor( "red", alpha.f = 0.2), adjustcolor( "blue", alpha.f = 0.2))
+
+dir.create("network_plots")
+pdf(paste0("network_plots/",group_name, "_network_plot_corr07.pdf"), width = 7, height = 6)
+qgraph(link.df, 
+       groups = Clusters, 
+       shape = Shapes, 
+       layout = "spring",
+       label.prop = 1.5,
+       vTrans = 150,
+       border.color = "gray50",
+       arrows = F,
+       edge.color = mycols,
+       legend = F)
+dev.off()
+```
+
+## nmo corr 06
+```{r}
+group_name <- "nmo"
+cor_thres <- "0.6"
+## info 
+info.input <- read.table(paste0("output_corr06_allfeatures/", group_name, 
+                                "/cluster_membership_centrality_", 
+                                group_name, "_table.txt"), header = T)
+colnames(info.input)[1] <- "name"
+## link
+link.input <- read.table(paste0("output_corr06_allfeatures/", group_name, 
+                               "/Multidata_Network_threshold", cor_thres, "_", 
+                               group_name, "_linkmatrix.txt"))
+colnames(link.input) <- link.input[1,]
+link.input <- link.input[-1,]
+
+g <- graph_from_data_frame(link.input) # link 
+info.new <- info.input[match(V(g)$name, info.input$name),] # link name = info name
+
+### omics shapes
+info.new$omics <- NA
+info.new[grep("X",info.new$name),]$omics <- "immune"
+info.new[grep("Y",info.new$name),]$omics <- "cytokine"
+info.new[grep("Z",info.new$name),]$omics <- "metabolite"
+omics <- info.new$omics
+
+Shapes <- case_when(omics == "immune" ~ "triangle",
+                    omics == "cytokine" ~ "circle",
+                    omics == "metabolite" ~ "square")
+
+### features clusters
+info.new$cluster <- paste0("C", info.new$Cluster)
+Clusters <- list()
+for (i in unique(info.new$cluster)) {
+  Clusters[[i]] <- which(info.new$cluster == i)
+}
+names(Clusters) <- unique(info.new$cluster)
+
+### link symbol to features names
+keys <- unique(info.new$Name)
+keys == info.new$Name
+names(keys) <- info.new$name
+
+link <- apply(link.input[,1:2], 2, function(x){recode(x, !!!keys)}) %>% 
+  data.frame() %>% 
+  mutate(weight = link.input$weight)
+
+## plot 
+mycols <- ifelse(link$weight > 0, adjustcolor( "red", alpha.f = 0.2), adjustcolor( "blue", alpha.f = 0.2))
+
+pdf(paste0("network_plots/",group_name, "_network_plot_corr06.pdf"), width = 7, height = 6)
+qgraph(link, 
+       groups = Clusters, 
+       shape = Shapes, 
+       layout = "spring",
+       label.prop = 1.5,
+       vTrans = 150,
+       border.color = "gray50",
+       arrows = F,
+       edge.color = mycols,
+       legend = F)
+dev.off()
+```
+
+## control corr07
+```{r}
+group_name <- "control"
+cor_thres <- "0.7"
+## info 
+info.input <- read.table(paste0("output_corr07_allfeatures/", group_name, 
+                                "/cluster_membership_centrality_", 
+                                group_name, "_table.txt"), header = T)
+colnames(info.input)[1] <- "name"
+## link
+link.input <- read.table(paste0("output_corr07_allfeatures/", group_name, 
+                               "/Multidata_Network_threshold", cor_thres, "_", 
+                               group_name, "_linkmatrix.txt"))
+colnames(link.input) <- link.input[1,]
+link.input <- link.input[-1,]
+
+g <- graph_from_data_frame(link.input) # link 
+info.new <- info.input[match(V(g)$name, info.input$name),] # link name = info name
+
+### omics shapes
+info.new$omics <- NA
+info.new[grep("X",info.new$name),]$omics <- "immune"
+info.new[grep("Y",info.new$name),]$omics <- "cytokine"
+info.new[grep("Z",info.new$name),]$omics <- "metabolite"
+omics <- info.new$omics
+
+Shapes <- case_when(omics == "immune" ~ "triangle",
+                    omics == "cytokine" ~ "circle",
+                    omics == "metabolite" ~ "square")
+
+### features clusters
+info.new$cluster <- paste0("C", info.new$Cluster)
+Clusters <- list()
+for (i in unique(info.new$cluster)) {
+  Clusters[[i]] <- which(info.new$cluster == i)
+}
+names(Clusters) <- unique(info.new$cluster)
+
+### link symbol to features names
+keys <- unique(info.new$Name)
+keys == info.new$Name
+names(keys) <- info.new$name
+
+link <- apply(link.input[,1:2], 2, function(x){recode(x, !!!keys)}) %>% 
+  data.frame() %>% 
+  mutate(weight = link.input$weight)
+
+## plot 
+mycols <- ifelse(link$weight > 0, adjustcolor( "red", alpha.f = 0.2), adjustcolor( "blue", alpha.f = 0.2))
+
+pdf(paste0("network_plots/",group_name, "_network_plot_corr07.pdf"), width = 7, height = 6)
+qgraph(link, 
+       groups = Clusters, 
+       shape = Shapes, 
+       layout = "spring",
+       label.prop = 1.5,
+       vTrans = 150,
+       border.color = "gray50",
+       arrows = F,
+       edge.color = mycols,
+       legend = F)
+dev.off()
+```
+
+## control 06
+```{r}
+group_name <- "control"
+cor_thres <- "0.6"
+## info 
+info.input <- read.table(paste0("output_corr06_allfeatures/", group_name, 
+                                "/cluster_membership_centrality_", 
+                                group_name, "_table.txt"), header = T)
+colnames(info.input)[1] <- "name"
+## link
+link.input <- read.table(paste0("output_corr06_allfeatures/", group_name, 
+                               "/Multidata_Network_threshold", cor_thres, "_", 
+                               group_name, "_linkmatrix.txt"))
+colnames(link.input) <- link.input[1,]
+link.input <- link.input[-1,]
+
+g <- graph_from_data_frame(link.input) # link 
+info.new <- info.input[match(V(g)$name, info.input$name),] # link name = info name
+
+### omics shapes
+info.new$omics <- NA
+info.new[grep("X",info.new$name),]$omics <- "immune"
+info.new[grep("Y",info.new$name),]$omics <- "cytokine"
+info.new[grep("Z",info.new$name),]$omics <- "metabolite"
+omics <- info.new$omics
+
+Shapes <- case_when(omics == "immune" ~ "triangle",
+                    omics == "cytokine" ~ "circle",
+                    omics == "metabolite" ~ "square")
+
+### features clusters
+info.new$cluster <- paste0("C", info.new$Cluster)
+Clusters <- list()
+for (i in unique(info.new$cluster)) {
+  Clusters[[i]] <- which(info.new$cluster == i)
+}
+names(Clusters) <- unique(info.new$cluster)
+
+### link symbol to features names
+keys <- unique(info.new$Name)
+keys == info.new$Name
+names(keys) <- info.new$name
+
+link <- apply(link.input[,1:2], 2, function(x){recode(x, !!!keys)}) %>% 
+  data.frame() %>% 
+  mutate(weight = link.input$weight)
+
+## plot 
+mycols <- ifelse(link$weight > 0, adjustcolor( "red", alpha.f = 0.2), adjustcolor( "blue", alpha.f = 0.2))
+
+pdf(paste0("network_plots/",group_name, "_network_plot_corr06.pdf"), width = 7, height = 6)
+qgraph(link, 
+       groups = Clusters, 
+       shape = Shapes, 
+       layout = "spring",
+       label.prop = 1.5,
+       vTrans = 150,
+       border.color = "gray50",
+       arrows = F,
+       edge.color = mycols,
+       legend = F)
+dev.off()
+```

@@ -1,0 +1,202 @@
+---
+title: "rcca"
+author: ""
+date: "2021/10/26"
+output: 
+  html_document: 
+    toc: yes
+    toc_depth: 5
+    toc_float: yes
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE)
+```
+
+## Library
+```{r}
+library(mixOmics)
+library(dplyr)
+```
+
+## Data
+```{r}
+load("../../input/3omics_combined/SixHosp_5groups_319subjects_3omics.RData")
+immune <- data.frame(immune)
+ck <- data.frame(ck)
+immune <- immune[!is.na(immune$T),]
+ck <- ck[match(rownames(immune), rownames(ck)),]
+meta_info <- meta_info[match(rownames(immune), meta_info$sample_FACS),]
+```
+
+## rCCA: NC vs SCD1
+```{r}
+groups <- c("NC", "SCD1")
+meta_sel <- meta_info[meta_info$Group %in% groups,]
+meta_df <- meta_sel
+
+meta_df <- meta_df[order(meta_df$Group),]
+int_id <- meta_df$sample_FACS
+ck_df <- ck[match(int_id, rownames(ck)),]
+immune_df <- immune[match(int_id, rownames(immune)),]
+
+X <- log2(ck_df + 0.0001)
+Y <- log2(immune_df + 0.0001)
+```
+
+### Estimation of penalisation parameters (shrinkage method)
+```{r}
+rcc.shrink <- rcc(X, Y, ncomp = 2, method = 'shrinkage')
+plot(rcc.shrink)
+```
+
+#### Sample Plots
+```{r, fig.width=7, fig.height=5}
+plotIndiv(rcc.shrink, comp = 1:2, ind.names = meta_df$Group, 
+          group = meta_df$Group, rep.space = "XY-variate",
+          legend = TRUE, title = 'rCCA XY-space')
+
+plotIndiv(rcc.shrink, comp = 1:2, ind.names = meta_df$Group, 
+          group = meta_df$Group, 
+          legend = TRUE, title = 'each subspace')
+```
+
+#### Variable Plots
+```{r, fig.width=11, fig.height=9}
+#cutoff = 0.5 so that only the variables outside the small circle of radius 0.5 are represented
+plotVar(rcc.shrink, comp = 1:2, cutoff = 0.5, var.names = c(TRUE, TRUE),
+        cex = c(4, 4), title = 'rCCA comp 1 - 2, corr 0.5')
+
+cim(rcc.shrink, comp = 1:2, xlab = "cytokine", ylab = "immune", 
+    margins = c(5, 6))
+```
+
+
+
+## rCCA: SCD1 vs aMCI
+```{r}
+groups <- c("SCD1", "aMCI")
+meta_sel <- meta_info[meta_info$Group %in% groups,]
+meta_df <- meta_sel
+
+meta_df <- meta_df[order(meta_df$Group),]
+int_id <- meta_df$sample_FACS
+ck_df <- ck[match(int_id, rownames(ck)),]
+immune_df <- immune[match(int_id, rownames(immune)),]
+
+X <- log2(ck_df + 0.0001)
+Y <- log2(immune_df + 0.0001)
+```
+
+### Estimation of penalisation parameters (shrinkage method)
+```{r}
+rcc.shrink <- rcc(X, Y, ncomp = 2, method = 'shrinkage')
+plot(rcc.shrink)
+```
+
+#### Sample Plots
+```{r, fig.width=7, fig.height=5}
+plotIndiv(rcc.shrink, comp = 1:2, ind.names = meta_df$Group, 
+          group = meta_df$Group, rep.space = "XY-variate",
+          legend = TRUE, title = 'rCCA XY-space')
+
+plotIndiv(rcc.shrink, comp = 1:2, ind.names = meta_df$Group, 
+          group = meta_df$Group, 
+          legend = TRUE, title = 'each subspace')
+```
+
+#### Variable Plots
+```{r, fig.width=11, fig.height=9}
+#cutoff = 0.5 so that only the variables outside the small circle of radius 0.5 are represented
+plotVar(rcc.shrink, comp = 1:2, cutoff = 0.5, var.names = c(TRUE, TRUE),
+        cex = c(4, 4), title = 'rCCA comp 1 - 2, corr 0.5')
+
+cim(rcc.shrink, comp = 1:2, xlab = "cytokine", ylab = "immune", 
+    margins = c(5, 6))
+```
+
+
+## rCCA: aMCI vs AD1
+```{r}
+groups <- c("aMCI", "AD_1")
+meta_sel <- meta_info[meta_info$Group %in% groups,]
+meta_df <- meta_sel
+
+meta_df <- meta_df[order(meta_df$Group),]
+int_id <- meta_df$sample_FACS
+ck_df <- ck[match(int_id, rownames(ck)),]
+immune_df <- immune[match(int_id, rownames(immune)),]
+
+X <- log2(ck_df + 0.0001)
+Y <- log2(immune_df + 0.0001)
+```
+
+### Estimation of penalisation parameters (shrinkage method)
+```{r}
+rcc.shrink <- rcc(X, Y, ncomp = 2, method = 'shrinkage')
+plot(rcc.shrink)
+```
+
+#### Sample Plots
+```{r, fig.width=7, fig.height=5}
+plotIndiv(rcc.shrink, comp = 1:2, ind.names = meta_df$Group, 
+          group = meta_df$Group, rep.space = "XY-variate",
+          legend = TRUE, title = 'rCCA XY-space')
+
+plotIndiv(rcc.shrink, comp = 1:2, ind.names = meta_df$Group, 
+          group = meta_df$Group, 
+          legend = TRUE, title = 'each subspace')
+```
+
+#### Variable Plots
+```{r, fig.width=11, fig.height=9}
+#cutoff = 0.5 so that only the variables outside the small circle of radius 0.5 are represented
+plotVar(rcc.shrink, comp = 1:2, cutoff = 0.4, var.names = c(TRUE, TRUE),
+        cex = c(4, 4), title = 'rCCA comp 1 - 2, corr 0.4')
+
+cim(rcc.shrink, comp = 1:2, xlab = "cytokine", ylab = "immune", 
+    margins = c(5, 6))
+```
+
+
+## rCCA: AD1 vs AD2
+```{r}
+groups <- c("AD_1", "AD_2")
+meta_sel <- meta_info[meta_info$Group %in% groups,]
+meta_df <- meta_sel
+
+meta_df <- meta_df[order(meta_df$Group),]
+int_id <- meta_df$sample_FACS
+ck_df <- ck[match(int_id, rownames(ck)),]
+immune_df <- immune[match(int_id, rownames(immune)),]
+
+X <- log2(ck_df + 0.0001)
+Y <- log2(immune_df + 0.0001)
+```
+
+### Estimation of penalisation parameters (shrinkage method)
+```{r}
+rcc.shrink <- rcc(X, Y, ncomp = 2, method = 'shrinkage')
+plot(rcc.shrink)
+```
+
+#### Sample Plots
+```{r, fig.width=7, fig.height=5}
+plotIndiv(rcc.shrink, comp = 1:2, ind.names = meta_df$Group, 
+          group = meta_df$Group, rep.space = "XY-variate",
+          legend = TRUE, title = 'rCCA XY-space')
+
+plotIndiv(rcc.shrink, comp = 1:2, ind.names = meta_df$Group, 
+          group = meta_df$Group, 
+          legend = TRUE, title = 'each subspace')
+```
+
+#### Variable Plots
+```{r, fig.width=11, fig.height=9}
+#cutoff = 0.5 so that only the variables outside the small circle of radius 0.5 are represented
+plotVar(rcc.shrink, comp = 1:2, cutoff = 0.5, var.names = c(TRUE, TRUE),
+        cex = c(4, 4), title = 'rCCA comp 1 - 2, corr 0.5')
+
+cim(rcc.shrink, comp = 1:2, xlab = "cytokine", ylab = "immune", 
+    margins = c(5, 6))
+```

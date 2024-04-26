@@ -1,0 +1,24 @@
+---
+title: "data_prep"
+author: ""
+date: "2021/11/2"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## data for gprofiler
+```{r}
+diff_input <- read_excel("../01_tables/linear_regression_age_table.xlsx")
+diff <- diff_input[diff_input$fdr < 0.01,]
+openxlsx::write.xlsx(diff, file = "lm_signif_fdr001.xlsx")
+```
+
+## all
+```{r}
+all_input <- read.csv("gprofiler/all_gProfiler_hsapiens_2021-11-2 上午10-17-33__intersections.csv")
+all_go <- all_input[grepl("^GO", all_input$source),]
+```
+
